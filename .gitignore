@@ -1,0 +1,29 @@
+# Dependencies (declared in packages/*/package.json; lock files stay tracked)
+node_modules/
+
+# Rebuildable projections and their SQLite temp files
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Memory repository operational state (mirrors the per-repo .gitignore)
+.ledger-lock
+.ledger-lock.stale-*
+
+# Local scratch / diagnostics
+tmp/
+scratch/
+*.log
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local environment and secrets — never committed
+.env
+.env.*
+*.pem
+*.key

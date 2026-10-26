@@ -1,0 +1,42 @@
+// Provider descriptor. Every `false` here is a capability the adapter really lacks.
+export const descriptor = Object.freeze({
+  id: 'git-ledger',
+  label: 'Git Ledger (evidence-backed)',
+  icon: { kind: 'glyph', value: '⎇' },
+  kind: 'local',
+  workspaceBinding: 'provider-global',
+  summary: 'Local Git-versioned memory ledger: every accepted change is one commit with a reason and DSH Session evidence; SQLite FTS is a rebuildable projection.',
+  origin: 'third-party',
+  capabilities: {
+    search: true,
+    browse: true,
+    graph: true,
+    entities: false,
+    related: false,
+    remember: true,
+    link: false,
+    forget: false,
+    writeMode: 'exact',
+    deletionMode: 'unsupported',
+  },
+  fields: [
+    {
+      key: 'dataDir',
+      label: 'Ledger directory',
+      scope: 'service',
+      role: 'global-location',
+      input: 'path',
+      required: false,
+      help: 'Directory holding one Git repository per Memory Space. Defaults to <mnemon data dir>/git-ledger. Keep it outside project workspaces.',
+    },
+    {
+      key: 'ownerId',
+      label: 'Owner id',
+      scope: 'service',
+      input: 'text',
+      required: true,
+      maxLength: 128,
+      help: 'Trusted identity of the person whose memory this is. Stored in manifest.json; repositories with another owner are refused.',
+    },
+  ],
+});
