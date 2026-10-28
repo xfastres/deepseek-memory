@@ -8,6 +8,8 @@
 // Summaries, when they exist, are a separate concern that must pass a quote
 // check; this module never produces text.
 
+import { createHash } from 'node:crypto';
+
 const DAY = 86_400_000;
 
 function activeMemories(memories) {
@@ -33,7 +35,13 @@ function periodOf(members) {
 }
 
 function stableId(kind, key, members) {
-  return `S-${kind}-${key}-${members.length}`;
+  // The readable part is truncated, so the digest carries the identity: two
+  // session ids that share a 40-character prefix must not become one scenario.
+  const digest = createHash('sha256')
+    .update(`${key}\n${[...members].sort().join('\n')}`)
+    .digest('hex')
+    .slice(0, 10);
+  return `S-${kind}-${key}-${digest}`;
 }
 
 /**

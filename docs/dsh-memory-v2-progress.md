@@ -1133,3 +1133,14 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `client.js`：Host 客户端 `update` 支持该字段；保存编辑时仅当该行处于 `review_pending` 才带 `clearObjection`；「待核查」行的恢复按钮文案改为「接受现状」（`acceptAsIs`），与「已抑制」行的「恢复使用」区分语义。
 - 测试：`http-app` +1（异议存在 → 带 `clearObjection` 修改后 `suppressed`/`review_pending` 清空；不带字段的修改不影响异议；本无异议时返回 `objection_cleared: false` 且 200）；`client-panels` +1（请求体只在要求时携带该字段，普通编辑不携带）；完整套件 **351/351 通过**；`git diff --check` 退出码 0。
 - 未验证：浏览器端到端（新按钮文案与自动带字段的交互未在浏览器验证）；「接受现状」是否应同时写入一条「核查结论」记录（当前只清除异议，没有留痕；roadmap 未明确要求）；并发：两个窗口同时修改同一记忆仍由既有 `expectedBaseChangeId` 保护，未新增测试。
+
+### 迭代 30（2026-10-28，阶段 4/5 就绪度核查：L2/L3 只读核实）
+- 依据：`D11`（L2/L3 后置，先稳定 L1 自动提取、纠错与检索）、`roadmap §4.4/§4.5`（场景与画像只能从正式有效记忆派生、画像不得伪装用户原话、支撑变化触发复核、自动生成后置）。本轮不接线、不自动生成、不新增存储，只核实已有纯函数能否承接。
+- 核查证据：`host/scenarios.js`、`host/persona.js` 均为纯函数并有测试（`test/scenarios.test.mjs`、`test/persona.test.mjs`），但没有任何路由/UI/注入入口引用它们（`grep` 无调用方）→ 判定「部分实现：纯函数+测试，未接线」，不能算完成。
+- 本轮修掉两个真实缺陷（不涉及数据格式）：
+  1. `persona.js` 的 `PERSONA_TYPES` 含 `instruction`，但账本类型表（`provider-git-ledger/src/schema.js` 的 `MEMORY_TYPES`）没有该类型；规则类型 `instruction` 在写入边界被 `memory-types.js` 映射为 `constraint`。原实现会静默丢掉用户所有指令记忆。改为 `preference/constraint/decision`，并加两项测试：constraint 进入画像、账本中不可能出现 instruction。
+  2. `scenarios.js` 的 `stableId` 用截断 40 字符的 key + 成员数量生成 id，两个共享长前缀的 session 会撞 id。改为「可读前缀 + 完整 key 与成员集合的 sha256 前 10 位」，并加「长前缀不同 session 仍是两个场景」测试。
+- 新增就绪度文档 `docs/dsh-memory-l2-l3-readiness.md`：含现状表、已修缺陷、**接线前置条件 7 条**（L1 稳定性、异议联动、scope 语义、复核触发、存储位置决策、注入禁令、UI 入口）、未决问题 3 条（goal 是否入画像、摘要由谁写、聚类阈值无真实数据支撑）。
+- 测试：`persona` 8→10 项、`scenarios` 8→9 项，两个文件 19/19 通过；完整套件见本轮记录；`git diff --check` 退出码 0。
+- 结论与边界：L2/L3 **仍未到可接线状态**——异议联动（改模块签名）、复核状态（新运行时字段）、存储位置（数据格式）三项都属「接口/格式变更或架构决策」，按规则先确认，不擅自启用。阶段 4/5 暂不启动。
+- 未验证：两个模块仅有构造数据的单元测试，无真实账本数据运行记录；阈值/聚类效果未在真实会话上观察。

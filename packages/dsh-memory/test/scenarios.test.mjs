@@ -87,3 +87,20 @@ test('hostile input yields no scenarios rather than an exception', () => {
   assert.deepEqual(clusterMemories(undefined).scenarios, []);
   assert.deepEqual(clusterMemories([null, {}, { id: 'M-1' }]).scenarios, []);
 });
+
+test('two sessions with the same long prefix stay two scenarios', () => {
+  const prefix = 'session-'.repeat(6);
+  const { scenarios } = clusterMemories([
+    memory('M-1', { source_refs: [{ session_id: prefix + '-a', event_seq: 1, event_type: 'user/message' }] }),
+    memory('M-2', { source_refs: [{ session_id: prefix + '-a', event_seq: 2, event_type: 'user/message' }] }),
+    memory('M-3', { source_refs: [{ session_id: prefix + '-a', event_seq: 3, event_type: 'user/message' }] }),
+    memory('M-4', { source_refs: [{ session_id: prefix + '-b', event_seq: 1, event_type: 'user/message' }] }),
+    memory('M-5', { source_refs: [{ session_id: prefix + '-b', event_seq: 2, event_type: 'user/message' }] }),
+    memory('M-6', { source_refs: [{ session_id: prefix + '-b', event_seq: 3, event_type: 'user/message' }] }),
+  ]);
+  const sessionScenarios = scenarios.filter((scenario) => scenario.kind === 'session');
+  assert.equal(sessionScenarios.length, 2, 'two different sessions are two episodes');
+  assert.notEqual(sessionScenarios[0].id, sessionScenarios[1].id, 'a clipped prefix must not decide identity');
+  assert.equal(sessionScenarios[0].members.length, 3);
+  assert.equal(sessionScenarios[1].members.length, 3);
+});

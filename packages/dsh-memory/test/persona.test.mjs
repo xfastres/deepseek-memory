@@ -33,13 +33,31 @@ test('one memory is not a pattern', () => {
   assert.equal(persona.considered, 1);
 });
 
-test('only preferences, instructions and decisions count', () => {
+test('only the ledger types that describe the user count', () => {
   const persona = buildPersona([
     memory('M-1', { type: 'fact' }),
     memory('M-2', { type: 'fact' }),
     memory('M-3', { type: 'event' }),
   ]);
   assert.deepEqual(persona.lines, []);
+});
+
+test('an instruction stored as a constraint is part of the persona', () => {
+  const persona = buildPersona([
+    memory('M-1', { type: 'constraint', content: '回答使用中文', entities: ['language'] }),
+    memory('M-2', { type: 'constraint', content: '先给结论再解释', entities: ['language'] }),
+  ]);
+  assert.equal(persona.lines.length, 1, 'the ledger calls an instruction a constraint');
+  assert.equal(persona.lines[0].type, 'constraint');
+  assert.deepEqual(persona.lines[0].sources.sort(), ['M-1', 'M-2']);
+});
+
+test('the rule kind instruction never appears in a ledger memory', () => {
+  const persona = buildPersona([
+    memory('M-1', { type: 'instruction' }),
+    memory('M-2', { type: 'instruction' }),
+  ]);
+  assert.deepEqual(persona.lines, [], 'reading a rule kind would silently accept an impossible ledger row');
 });
 
 test('retracted memories never reach the persona', () => {

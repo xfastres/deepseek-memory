@@ -10,7 +10,11 @@
 // picture of the user is in the context the model tends to confirm it instead
 // of reading the evidence.
 
-const PERSONA_TYPES = new Set(['preference', 'instruction', 'decision']);
+// These must be ledger types (MEMORY_TYPES in provider-git-ledger/schema.js),
+// not rule kinds. Extraction says "instruction", but the write boundary maps
+// it to "constraint" (memory-types.js); reading "instruction" here would
+// silently drop every instruction the user ever gave.
+const PERSONA_TYPES = new Set(['preference', 'constraint', 'decision']);
 const HEADLINE = 80;
 
 function eligible(memories) {
