@@ -268,6 +268,8 @@ function injectionSnapshot(injection) {
     snapshot_at: snapshot.at,
     path: injection.path,
     observed: injection.observed,
+    sessions: injection.agentCount,
+    scope_probe: injection.probe,
     last_turn: latest === null || latest === undefined ? null : latest.turn,
     last_query_chars: latest === null || latest === undefined ? 0 : String(latest.text ?? '').length,
   };

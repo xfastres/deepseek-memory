@@ -5,6 +5,7 @@ import {
   chooseForContext,
   createInjectionRuntime,
   messageText,
+  scopeShape,
   stepQuery,
 } from '../host/injection.js';
 
@@ -148,4 +149,53 @@ test('observation never throws, even with a hostile payload', () => {
 test('a service without state is refused at construction', () => {
   assert.throws(() => createInjectionRuntime({}), /state/);
   assert.throws(() => createInjectionRuntime({ service: {} }), /state/);
+});
+
+test('with two sessions seen, an unknown scope drops the query instead of guessing', async () => {
+  const service = serviceOf([memory('M-pnpm', '项目用 pnpm 作为包管理器')]);
+  const runtime = createInjectionRuntime({ service, now });
+  await runtime.refresh();
+
+  runtime.observe({ name: 'a' }, { agent: { id: 'session-a' }, turn: 1, messages: [{ role: 'user', content: 'pnpm 的问题' }] });
+  runtime.observe({ name: 'b' }, { agent: { id: 'session-b' }, turn: 1, messages: [{ role: 'user', content: '完全不相关的话题' }] });
+
+  const built = runtime.buildText({ name: 'c' });
+  assert.equal(built.path, 'ambiguous');
+  assert.equal(built.observation.text, '', 'another session query must never be borrowed');
+});
+
+test('a scope carrying the session id matches that session, not the latest', async () => {
+  const service = serviceOf([
+    memory('M-pnpm', '项目用 pnpm 作为包管理器'),
+    memory('M-other', '会议纪要归档在共享盘'),
+  ]);
+  const runtime = createInjectionRuntime({ service, now });
+  await runtime.refresh();
+
+  runtime.observe({ name: 'a' }, { agent: { id: 'session-aaaa1111' }, turn: 1, messages: [{ role: 'user', content: 'pnpm 怎么装' }] });
+  runtime.observe({ name: 'b' }, { agent: { id: 'session-bbbb2222' }, turn: 1, messages: [{ role: 'user', content: '会议纪要放哪' }] });
+
+  const built = runtime.buildText({ sessionId: 'session-aaaa1111' });
+  assert.equal(built.path, 'agent');
+  assert.deepEqual(built.chosen.map((entry) => entry.memory.id), ['M-pnpm']);
+});
+
+test('the probe records what the step scope looked like, once', () => {
+  const runtime = createInjectionRuntime({ service: serviceOf([]), now });
+  runtime.observe({ id: 'session-1234567890abcdef' }, { agent: { id: 'session-abcdefghijklmnop' }, turn: 4, messages: [] });
+  runtime.observe({ id: 'session-ffff' }, { agent: { id: 'session-ffff' }, turn: 5, messages: [] });
+  assert.equal(runtime.agentCount, 2);
+  assert.deepEqual(runtime.probe.observed.keys, ['id']);
+  assert.equal(runtime.probe.agent, 'session-abcdefghijklmnop');
+  assert.deepEqual(runtime.probe.observed.sessionish, ['session-1234567890abcdef']);
+});
+
+test('scopeShape never throws on hostile objects', () => {
+  const hostile = {};
+  Object.defineProperty(hostile, 'id', { get() { throw new Error('nope'); } });
+  const shape = scopeShape(hostile);
+  assert.equal(shape.type, 'object');
+  assert.deepEqual(shape.sessionish, []);
+  assert.equal(scopeShape(undefined).type, 'undefined');
+  assert.equal(scopeShape('text').type, 'string');
 });

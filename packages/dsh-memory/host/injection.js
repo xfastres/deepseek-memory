@@ -54,6 +54,32 @@ export function chooseForContext(memories, query, options = {}) {
   return selectMemories(memories, query, { now, scope: 'global', limit, budget });
 }
 
+/** A compact, string-only description of a scope object, for diagnosis. */
+export function scopeShape(scope) {
+  if (scope === null || scope === undefined) return { type: String(scope) };
+  if (typeof scope !== 'object') return { type: typeof scope };
+  let keys = [];
+  try {
+    keys = Object.keys(scope).slice(0, 12);
+  } catch {
+    keys = [];
+  }
+  const sessionish = [];
+  const add = (value) => {
+    if (typeof value === 'string' && /^session-|^[0-9a-f-]{20,}$/u.test(value)) sessionish.push(value.slice(0, 48));
+  };
+  try {
+    add(scope.id);
+    add(scope.key);
+    add(scope.sessionId);
+    add(scope.name);
+    if (scope.agent && typeof scope.agent === 'object') add(scope.agent.id);
+  } catch {
+    // A getter that throws is itself information; the keys above still show.
+  }
+  return { type: 'object', keys, sessionish };
+}
+
 /**
  * @param {object} options
  * @param {{state: () => Promise<{memories: Array<object>}>}} options.service
@@ -67,9 +93,12 @@ export function createInjectionRuntime(options = {}) {
   let snapshot = { at: null, memories: [] };
   /** scope object -> {turn, text, at} */
   const byScope = new WeakMap();
+  /** agent id -> {turn, text, at} */
+  const byAgent = new Map();
   let latest = null;
   let lastPath = 'none';
   let lastObservePath = 'none';
+  let probe = null;
 
   async function refresh() {
     const state = await service.state();
@@ -89,13 +118,27 @@ export function createInjectionRuntime(options = {}) {
       } else {
         lastObservePath = 'unscoped';
       }
+      const agentId = payload && payload.agent && typeof payload.agent.id === 'string' ? payload.agent.id : null;
+      if (agentId !== null) byAgent.set(agentId, entry);
+      if (probe === null) probe = { observed: scopeShape(scope), agent: agentId === null ? null : agentId.slice(0, 48) };
       return entry;
     } catch {
       return null;
     }
   }
 
-  /** Look up the observation for an assembly scope, with an explicit fallback. */
+  /**
+   * Look up the observation for an assembly scope.
+   *
+   * Three outcomes, and the difference matters:
+   *   - `scope`: the assembly reported the very object the step recorded;
+   *   - `agent`: the scope carried a session id we observed;
+   *   - `latest`: only one session has ever been seen, so "latest" is that one.
+   *
+   * When several sessions have been seen and none of the above matches, the
+   * answer is `ambiguous` and the query is dropped. Injecting another session's
+   * query would be worse than injecting nothing: it looks correct and is not.
+   */
   function lookup(scope) {
     if (scope !== null && typeof scope === 'object') {
       const remembered = byScope.get(scope);
@@ -103,6 +146,22 @@ export function createInjectionRuntime(options = {}) {
         lastPath = 'scope';
         return remembered;
       }
+      const shape = scopeShape(scope);
+      for (const candidate of shape.sessionish ?? []) {
+        for (const [agentId, entry] of byAgent) {
+          if (agentId.startsWith(candidate) || candidate.startsWith(agentId.slice(0, 36))) {
+            lastPath = 'agent';
+            return entry;
+          }
+        }
+      }
+    }
+    if (probe !== null && probe.observed !== undefined) {
+      probe.consumed = scopeShape(scope);
+    }
+    if (byAgent.size > 1) {
+      lastPath = 'ambiguous';
+      return { turn: null, text: '', at: null };
     }
     if (latest !== null) {
       lastPath = 'latest';
@@ -146,6 +205,8 @@ export function createInjectionRuntime(options = {}) {
     },
     get path() { return lastPath; },
     get observed() { return lastObservePath; },
+    get probe() { return probe; },
+    get agentCount() { return byAgent.size; },
     get snapshot() { return snapshot; },
     get latestObservation() { return latest; },
   };
