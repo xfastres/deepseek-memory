@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
+import { createMemoryApp } from '../host/http-app.js';
 import {
   apply,
   createPingHandler,
@@ -174,4 +178,94 @@ test('apply never throws and registers the route once a web server exists', () =
   apply({ get: (name) => (name === 'webServer' ? webServer : undefined), effect: (fn) => { fn(); return () => {}; } });
   assert.equal(registered.length, 10);
   assert.equal(registered[0].path, PING_PATH);
+});
+
+test('apply keeps an empty ledger entirely out of prompt assembly', () => {
+  const contexts = [];
+  const systemPrompt = { context(entry) { contexts.push(entry); return () => {}; } };
+  apply({
+    get: (name) => ({ systemPrompt })[name],
+    effect: (fn) => { fn(); return () => {}; },
+    on: () => () => {},
+  });
+  assert.equal(contexts.length, 0, 'an empty store registers no prompt context at all');
+});
+
+test('the step observer records the query and feeds the probe', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-wire-'));
+  const previous = process.env.DSH_MEMORY_DATA_DIR;
+  process.env.DSH_MEMORY_DATA_DIR = dir;
+  try {
+    const contexts = [];
+    const listeners = [];
+    const tooled = [];
+    const systemPrompt = { context(entry) { contexts.push(entry); return () => {}; } };
+    const tools = { register(definition) { tooled.push(definition); return () => {}; } };
+    const ctx = {
+      get: (name) => ({ systemPrompt, tools })[name],
+      effect: (fn) => { fn(); return () => {}; },
+      on: (event, handler) => { listeners.push({ event, handler }); return () => {}; },
+    };
+    apply(ctx);
+
+    let stepped = false;
+    const decision = { kind: 'enter', messages: [] };
+    // The Host binds a listener to its scope, so record under that same object.
+    const result = await listeners[0].handler.call(
+      ctx,
+      { agent: { id: 'session-x' }, messages: [{ role: 'user', content: '记住 pnpm 是包管理器' }], turn: 2, step: 1 },
+      () => { stepped = true; return decision; },
+    );
+    assert.equal(stepped, true);
+    assert.deepEqual(result, decision);
+    assert.equal(contexts.length, 0, 'an empty ledger still registers no prompt context');
+
+    const probe = await tooled[0].execute();
+    assert.equal(probe.injection.memories, 0);
+    assert.equal(probe.injection.observed, 'scope', 'the step was recorded under the bound scope object');
+    assert.equal(probe.injection.last_turn, 2);
+    assert.ok(probe.injection.last_query_chars > 0);
+    assert.equal(typeof probe.injection.snapshot_at, 'string');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
+    else process.env.DSH_MEMORY_DATA_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a ledger with an active memory reaches the prompt, and only then', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-prompt-'));
+  const previous = process.env.DSH_MEMORY_DATA_DIR;
+  process.env.DSH_MEMORY_DATA_DIR = dir;
+  try {
+    const ref = { session_id: 'session-x', event_seq: 2, event_type: 'user/message' };
+    const seed = createMemoryApp({ dataDir: dir });
+    await seed.service.add({ content: '这个项目用 pnpm，不用 npm', type: 'fact', sourceRefs: [ref] });
+
+    const contexts = [];
+    const listeners = [];
+    const systemPrompt = { context(entry) { contexts.push(entry); return () => {}; } };
+    const ctx = {
+      get: (name) => ({ systemPrompt })[name],
+      effect: (fn) => { fn(); return () => {}; },
+      on: (event, handler) => { listeners.push({ event, handler }); return () => {}; },
+    };
+    apply(ctx);
+    assert.equal(contexts.length, 0, 'nothing is registered before the first step');
+
+    await listeners[0].handler.call(
+      ctx,
+      { agent: { id: 'session-x' }, messages: [{ role: 'user', content: 'pnpm 怎么装依赖' }], turn: 1, step: 1 },
+      () => ({ kind: 'enter', messages: [] }),
+    );
+
+    assert.equal(contexts.length, 1, 'the step boundary registers the context');
+    assert.equal(contexts[0].name, 'dsh-memory');
+    const text = contexts[0].text({ scope: ctx });
+    assert.match(text, /pnpm/);
+  } finally {
+    if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
+    else process.env.DSH_MEMORY_DATA_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
 });

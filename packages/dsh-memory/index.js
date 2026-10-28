@@ -23,6 +23,7 @@ import {
   isTrustedWrite,
   writeJson,
 } from './host/http-app.js';
+import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
 
 export { API_PREFIX, isTrustedWrite, writeJson };
 
@@ -101,7 +102,8 @@ export async function probeRuntime() {
 }
 
 /** Read-only liveness probe plus the cached runtime capability answer. */
-export function createPingHandler() {
+export function createPingHandler(options = {}) {
+  const status = typeof options.status === 'function' ? options.status : () => null;
   return async (req, res) => {
     try {
       if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -115,10 +117,11 @@ export function createPingHandler() {
       writeJson(res, 200, {
         ok: true,
         plugin: '@local/dsh-memory',
-        phase: '2.4',
+        phase: '3.1',
         time: new Date().toISOString(),
         pid: process.pid,
         runtime: await probeRuntime(),
+        injection: safeStatus(status),
       });
     } catch {
       try {
@@ -130,11 +133,20 @@ export function createPingHandler() {
   };
 }
 
+function safeStatus(status) {
+  try {
+    return status();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A minimal read-only tool that proves the Host half is mounted inside the
  * running Harness, and that becomes the seam for the phase 3 memory tools.
  */
-export function createPingTool() {
+export function createPingTool(options = {}) {
+  const status = typeof options.status === 'function' ? options.status : () => null;
   return {
     name: 'dsh_memory_ping',
     description: 'Report whether the dsh-memory Host half is loaded and reachable.',
@@ -148,6 +160,7 @@ export function createPingTool() {
           phase: { type: 'string' },
           time: { type: 'string' },
           runtime: { type: 'object' },
+          injection: { type: ['object', 'null'] },
         },
         required: ['ok'],
         additionalProperties: true,
@@ -160,9 +173,10 @@ export function createPingTool() {
       return {
         ok: true,
         plugin: '@local/dsh-memory',
-        phase: '2.4',
+        phase: '3.1',
         time: new Date().toISOString(),
         runtime: await probeRuntime(),
+        injection: safeStatus(status),
       };
     },
   };
@@ -179,10 +193,10 @@ export function resolveDataDir(env = process.env) {
  * Build the route list. The memory application is created lazily on the first
  * request, so plugin activation touches no disk and cannot fail on a bad path.
  */
-export function createRoutes({ dataDir = resolveDataDir(), lookup = () => undefined } = {}) {
-  const routes = [{ kind: 'exact', path: PING_PATH, handler: createPingHandler() }];
+export function createRoutes({ dataDir = resolveDataDir(), lookup = () => undefined, getApp: shared, status } = {}) {
+  const routes = [{ kind: 'exact', path: PING_PATH, handler: createPingHandler({ status }) }];
   let app;
-  const getApp = () => {
+  const getApp = typeof shared === 'function' ? shared : () => {
     if (app === undefined) app = createMemoryApp({ dataDir, sessionQuery: lookup('sessionQuery') });
     return app;
   };
@@ -240,15 +254,97 @@ function service(ctx, name) {
  */
 export const inject = ['webServer', 'tools'];
 
+/** Prompt-context name; also the name reported by the ping probe. */
+export { CONTEXT_NAME };
+
+/** A compact, secret-free view of the injection cache for the ping probe. */
+function injectionSnapshot(injection) {
+  if (injection === null || injection === undefined) return null;
+  const snapshot = injection.snapshot;
+  const latest = injection.latestObservation;
+  return {
+    memories: Array.isArray(snapshot.memories) ? snapshot.memories.length : 0,
+    snapshot_at: snapshot.at,
+    path: injection.path,
+    observed: injection.observed,
+    last_turn: latest === null || latest === undefined ? null : latest.turn,
+    last_query_chars: latest === null || latest === undefined ? 0 : String(latest.text ?? '').length,
+  };
+}
+
 export function apply(ctx) {
   try {
+    const lookup = (name) => service(ctx, name);
+    let app;
+    const getApp = () => {
+      if (app === undefined) app = createMemoryApp({ dataDir: resolveDataDir(), sessionQuery: lookup('sessionQuery') });
+      return app;
+    };
+
+    // Injection is built first so the routes can refresh it after a write.
+    const injection = createInjectionRuntime({ service: { state: () => getApp().service.state() } });
+    const status = () => injectionSnapshot(injection);
+    const refresh = () => {
+      injection.refresh().catch(() => {});
+    };
+
     const webServer = service(ctx, 'webServer');
     if (webServer && typeof webServer.register === 'function') {
-      const lookup = (name) => service(ctx, name);
-      for (const route of createRoutes({ lookup })) keep(ctx, webServer.register(route));
+      for (const route of createRoutes({ lookup, getApp, status })) {
+        const handler = route.handler;
+        keep(ctx, webServer.register({
+          ...route,
+          handler: async (req, res) => {
+            await handler(req, res);
+            if (req.method !== 'GET') refresh();
+          },
+        }));
+      }
     }
     const tools = service(ctx, 'tools');
-    if (tools && typeof tools.register === 'function') keep(ctx, tools.register(createPingTool()));
+    if (tools && typeof tools.register === 'function') {
+      keep(ctx, tools.register(createPingTool({ status })));
+    }
+
+    const systemPrompt = service(ctx, 'systemPrompt');
+    let contextOff = null;
+    /**
+     * Register the prompt context only once the ledger actually holds something.
+     *
+     * Registration is cheap but prompt assembly is on the critical path of every
+     * step, so an empty store keeps this plugin out of assembly entirely.
+     */
+    const ensureContext = () => {
+      if (contextOff !== null || !systemPrompt || typeof systemPrompt.context !== 'function') return;
+      const eligible = injection.snapshot.memories.some((memory) => memory && memory.status === 'active');
+      if (!eligible) return;
+      const provider = (context) => {
+        try {
+          return injection.buildText(context && context.scope).text;
+        } catch {
+          return '';
+        }
+      };
+      contextOff = systemPrompt.context({ name: CONTEXT_NAME, order: 100, text: provider });
+      if (typeof contextOff !== 'function') contextOff = () => {};
+      keep(ctx, contextOff);
+    };
+
+    // Observe the text entering each step and keep the snapshot fresh. The
+    // refresh happens here, never in the prompt provider, because this is the
+    // only place where waiting for the ledger is acceptable.
+    if (typeof ctx.on === 'function') {
+      const onPreStep = function onPreStep(payload, next) {
+        injection.observe(this === undefined ? ctx : this, payload);
+        return Promise.resolve(injection.ensureFresh())
+          .then(() => ensureContext())
+          .catch(() => {})
+          .then(() => next());
+      };
+      const off = ctx.on('agent/pre-step', onPreStep);
+      if (typeof off === 'function') keep(ctx, off);
+      else if (off && typeof off.dispose === 'function') keep(ctx, () => off.dispose());
+    }
   } catch {
     // A Host-half failure must never take the Harness down with it.
   }
