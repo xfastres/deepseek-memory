@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 结构化字段（L1 账本 schema 已有，此前被写入层丢弃）：`POST /add` 与 `POST /update` 接受可选 `tags`（字符串数组，≤20）与 `entities`（字符串数组，≤50），原样交给账本校验器：合法列表写入记录，类型不合法由 schema 拒绝并返回 422 `invalid`，不会被静默忽略。`/update` 省略列表时保留原值，显式给出非空列表时替换（账本提供方的既有语义，宿主不额外改写）。
+
 > 修正即回应异议（§6.5）：`POST /update` 可选 `clearObjection: true`，写入成功后清除该记忆的活动异议（响应带 `objection_cleared`；本就没有异议不算错误，返回 `false`）。未带该字段的普通修改不改变异议状态。面板对「待核查」行提供「接受现状」（等价于 `POST /objections/clear`），以及在编辑保存时自动带上 `clearObjection`。
 
 > 核查类异议（§6.3）：`too_broad`/`missing_context`/`wrong_scope`/`duplicate` 是「请重新核查」而不是「判为错误」，`GET /objections` 因此额外返回 `review_pending`（这些记忆的 id 数组）。它们**同时仍在 `suppressed` 中**：未核查清楚的记忆不得被当作已确认结论；面板对这类行显示「待核查」。自动接受路径拿不到这些记忆的重新激活权：`decideAutoMemory` 遇到「正文与待核查记忆相同」的候选直接降为 `REVIEW_REQUIRED`（`reasons: ['objected-memory']`）。

@@ -168,3 +168,38 @@ test('the state row carries what retrieval needs to be safe', async () => {
     assert.equal(memory.sensitivity, null, 'the ledger has no private marker yet; absent means absent');
   });
 });
+
+test('tags and entities reach the ledger instead of being dropped', async () => {
+  await withService(async (service) => {
+    const added = await service.add({
+      content: '项目使用 pnpm 管理依赖',
+      type: 'fact',
+      sourceRefs: REF,
+      tags: ['tooling', 'pnpm'],
+      entities: ['pnpm', 'F:\\deepseek-memory'],
+    });
+    assert.equal(added.status, 'committed');
+    assert.deepEqual(added.memory.tags, ['tooling', 'pnpm']);
+    assert.deepEqual(added.memory.entities, ['pnpm', 'F:\\deepseek-memory']);
+
+    const [memory] = (await service.state()).memories;
+    assert.deepEqual(memory.tags, ['tooling', 'pnpm'], 'a reader sees the same structure the writer stored');
+
+    const updated = await service.update({
+      memoryId: memory.id,
+      content: '项目使用 pnpm 管理依赖（工作区）',
+      expectedBaseChangeId: memory.last_change_id,
+      entities: ['pnpm', 'workspace'],
+    });
+    assert.deepEqual(updated.memory.entities, ['pnpm', 'workspace'], 'an explicit list replaces the old one');
+    assert.deepEqual(updated.memory.tags, ['tooling', 'pnpm'], 'an omitted list keeps what was there');
+
+    const unchanged = await service.update({
+      memoryId: memory.id,
+      content: '项目使用 pnpm 管理依赖（最终）',
+      expectedBaseChangeId: updated.memory.last_change_id,
+    });
+    assert.deepEqual(unchanged.memory.entities, ['pnpm', 'workspace'], 'an update that says nothing about structure cannot erase it');
+    assert.deepEqual(unchanged.memory.tags, ['tooling', 'pnpm']);
+  });
+});

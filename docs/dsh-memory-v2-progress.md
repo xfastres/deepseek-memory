@@ -1144,3 +1144,12 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：`persona` 8→10 项、`scenarios` 8→9 项，两个文件 19/19 通过；完整套件见本轮记录；`git diff --check` 退出码 0。
 - 结论与边界：L2/L3 **仍未到可接线状态**——异议联动（改模块签名）、复核状态（新运行时字段）、存储位置（数据格式）三项都属「接口/格式变更或架构决策」，按规则先确认，不擅自启用。阶段 4/5 暂不启动。
 - 未验证：两个模块仅有构造数据的单元测试，无真实账本数据运行记录；阈值/聚类效果未在真实会话上观察。
+
+### 迭代 31（2026-10-28，阶段 2：受控写入补齐账本已有但被丢弃的字段）
+- 依据：`roadmap §4.2`（L1 原子记忆字段包含 tags/entities 等结构化信息）、单一 MemoryWriter 原则。缺口证据：账本 schema 明确接受 `tags`/`entities`（`provider-git-ledger/src/schema.js` `stringList`，上限 20/50），`ledger-service.js` 的 `toUiMemory` 也读取它们，但 `add()`/`update()` 从不传递 → 任何写入路径都无法产生这两个字段，`host/scenarios.js` 的实体聚类与 `host/persona.js` 的实体分组因此在真实数据上永远为空。
+- 实现：
+  - `host/ledger-service.js`：`add`/`update` 接受可选 `tags`/`entities` 并传入提案；省略时由 schema 归一为空列表（UPDATE 时提供方保留原值，显式非空列表才替换）。
+  - `host/http-app.js`：`/add`、`/update` 原样透传 `body.tags`/`body.entities`——**不新增自己的校验分支**，由账本 schema 作为唯一校验器，畸形列表得到真实 422 `invalid` 而不是被静默丢弃。
+- 测试：`ledger-service` +1（写入后读者看到同一结构；update 显式列表替换 entities；update 省略保留；第三次 update 不擦除）；`http-app` +1（`/add` 携带 tags/entities 成功；`tags: 'tooling'` 得到 422 `invalid`）；完整套件 **356/356 通过**；`git diff --check` 退出码 0。
+- 说明：本轮只打通**已接受的数据格式**，未新增字段、未改 schema、未改 `/add` 的必需字段与状态码。结构化字段目前只能由 API 调用方提供；规则抽取器不产出 tags/entities（那属于新的抽取能力，未在本轮实现）。
+- 未验证：真实使用中谁会提供 tags/entities（面板输入框尚未暴露，API 直接调用可用）；实体抽取能力仍不存在，因此 L2 实体聚类在真实数据上仍不会被触发；浏览器端展示未验证。

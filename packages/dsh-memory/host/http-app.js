@@ -280,6 +280,10 @@ export function createMemoryApp(options = {}) {
           type: typeof body.type === 'string' ? body.type : 'fact',
           sourceRefs: [ref],
           idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined,
+          // Passed through untouched: the ledger schema is the one validator, so
+          // a malformed list is refused with a real reason instead of vanishing.
+          tags: body.tags,
+          entities: body.entities,
         });
         writeJson(res, 200, { ok: true, ...result });
       } catch (error) {
@@ -300,6 +304,8 @@ export function createMemoryApp(options = {}) {
           memoryId: body.memoryId,
           content,
           expectedBaseChangeId: typeof body.expectedBaseChangeId === 'string' ? body.expectedBaseChangeId : null,
+          tags: body.tags,
+          entities: body.entities,
         });
         // The new wording answers the objection (§6.5): the user may ask for it
         // to be cleared in the same request, so the memory is not left hidden

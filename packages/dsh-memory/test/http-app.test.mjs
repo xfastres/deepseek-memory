@@ -988,3 +988,41 @@ test('a corrected wording ends the objection it answers, in the same write', asy
     assert.equal(noObjection.json.objection_cleared, false, 'nothing to clear is not an error');
   });
 });
+
+test('the add route carries tags and entities, and refuses a malformed list', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1, content: [{ type: 'text', text: '我们决定用 pnpm' }] } } }; },
+      },
+    });
+    const added = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: {
+        content: '项目使用 pnpm 管理依赖',
+        type: 'fact',
+        sessionId: 's1',
+        turn: 1,
+        tags: ['tooling'],
+        entities: ['pnpm'],
+      },
+    });
+    assert.equal(added.status, 200);
+    assert.deepEqual(added.json.memory.tags, ['tooling']);
+    assert.deepEqual(added.json.memory.entities, ['pnpm']);
+
+    const malformed = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: {
+        content: '项目使用 pnpm 管理依赖（重复）',
+        sessionId: 's1',
+        turn: 1,
+        tags: 'tooling',
+      },
+    });
+    assert.equal(malformed.status, 422, 'the schema is the validator, so a bad list is refused not ignored');
+    assert.equal(malformed.json.error, 'invalid');
+  });
+});

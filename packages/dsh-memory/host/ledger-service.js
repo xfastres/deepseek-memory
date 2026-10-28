@@ -197,7 +197,15 @@ export function createLedgerService(options = {}) {
     };
   }
 
-  function add({ content, type = 'fact', sourceRefs, idempotencyKey, scope, reason }) {
+  /**
+   * Write one new memory.
+   *
+   * `tags` and `entities` are part of the ledger record schema and the UI already
+   * reads them (toUiMemory); dropping them here meant every memory promised
+   * structure the ledger could never hold. They stay optional: the schema turns
+   * an omitted list into [].
+   */
+  function add({ content, type = 'fact', sourceRefs, idempotencyKey, scope, reason, tags, entities }) {
     return apply({
       change_type: 'ADD',
       content,
@@ -205,18 +213,24 @@ export function createLedgerService(options = {}) {
       source_kind: 'user-explicit',
       source_refs: sourceRefs,
       scope,
+      tags,
+      entities,
       reason,
       idempotency_key: idempotencyKey,
     });
   }
 
-  function update({ memoryId, content, expectedBaseChangeId, sourceRefs, reason }) {
+  function update({ memoryId, content, expectedBaseChangeId, sourceRefs, reason, tags, entities }) {
     return apply({
       change_type: 'UPDATE',
       target_memory_id: memoryId,
       content,
       source_kind: 'user-correction',
       source_refs: sourceRefs,
+      // The provider keeps the previous list when the new one is empty, so an
+      // update that says nothing about structure cannot erase it by accident.
+      tags,
+      entities,
       expected_base_change_id: expectedBaseChangeId ?? null,
       reason,
     });
