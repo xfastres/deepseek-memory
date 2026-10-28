@@ -81,6 +81,26 @@ Host 半边还注册了 `dsh_memory_ping` 工具。重启后我可以用 `cordis
 - 账本服务 8（慢，约 13 秒，因为每条都要真的 `git commit`）
 - **合计 37 项全部通过**
 
+## 阶段 2.4a 补充：证据解析（Q5 / Q6 已解决）
+
+**Q5 有答案了**：Host 有 `ctx.sessionQuery` 服务，提供 `listEvents(sessionId)`、`readEvent({sessionId, seq})`、`readSession(sessionId)`。所以**不需要自己解压 zstd 会话文件**，用正式服务即可。
+
+**Q6 已实现**：`packages/dsh-memory/host/session-evidence.js`
+
+- `turnUserMessageSeq(records, turn)`：纯函数，按 `turn/start` 定位轮次，取该轮第一个 `user/message` 的 `seq`。
+- `createEvidenceResolver({ sessionQuery })`：通过服务读日志；用 `readEvent` 核对 `data.turn`，因为 fork / 压缩后轮次号可能不连续——**核对不上就扫描纠正，仍对不上返回 `undefined`，拒绝写入**，绝不编造 `event_seq`。
+- `quoteDigest(text)`：只存原文的 sha256，不复制原文。
+- `verify(refs)`：检查证据是否还指向真实且类型正确的事件，返回 `event-missing` / `event-type-mismatch` / `session-unreadable`。
+
+13 项测试，含“轮次号不连续时用读取纠正”和“读不到就拒绝而不是猜”两个关键场景。
+
+### 累计测试
+
+- 客户端 15 + Host 10 + 真实 HTTP 4 = 29（约 0.24 秒）
+- 账本服务 8（约 13 秒，真实 `git commit`）
+- 证据解析 13（约 0.12 秒）
+- **合计 50 项全部通过**
+
 ## 下一步
 
-仍是重启验证通道。之后：2.4b 把路由接上这个服务，同时解决 Q5（Host 读 Session 日志拿 event_seq）。
+仍是重启验证通道。之后：2.4b 接路由，2.5 迁移（现在证据解析已经就绪）。

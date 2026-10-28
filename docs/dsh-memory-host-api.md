@@ -164,5 +164,5 @@ Host 端幂等：同一 `id@version` 重复导入不重复写入。
 | Q2 | 页面同源 fetch 能否通过 DSH 认证层 | 同上 |
 | Q3 | `webServer.register` 的真实路由形状是否与任务板一致 | 同上（404 / 403 / 200 三者必居其一） |
 | Q4 | 插件能否从 `~/.dsh` 之外的路径访问数据目录（沙箱限制） | 2.4a |
-| Q5 | Host 到会话日志的读取权限（阶段 3 需要） | 阶段 3.1 |
-| Q6 | 旧数据只有 `{session_id, turn}`，账本要求 `source_refs[].event_seq`；如何把 turn 解析成真实 event_seq | 2.5 之前必须解决（依赖 Q5） |
+| Q5 | Host 到会话日志的读取权限（阶段 3 需要） | **已答**：`ctx.sessionQuery` 提供 `listEvents / readEvent / readSession`，Host 可正式读取，无需自己解压 zstd |
+| Q6 | 旧数据只有 `{session_id, turn}`，账本要求 `source_refs[].event_seq`；如何把 turn 解析成真实 event_seq | **已实现** `host/session-evidence.js`：按 `turn/start` 定位轮次，取该轮第一个 `user/message` 的 seq；用 `readEvent` 核对 `data.turn`，核对不上就扫描纠正，仍对不上则返回 `undefined` 拒绝写入 |
