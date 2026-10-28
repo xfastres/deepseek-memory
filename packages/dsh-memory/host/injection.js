@@ -12,7 +12,8 @@
 // paths and the chosen one is reported: a per-scope lookup when it matches, a
 // general block (pinned and recent memories, no query scoring) otherwise.
 
-import { formatInjection, selectMemories } from './retrieval.js';
+import { formatInjection, selectMemories, DEFAULT_CONSTRAINT_BUDGET, DEFAULT_CONSTRAINT_MAX_CHARS, DEFAULT_CONSTRAINT_MAX_ITEMS } from './retrieval.js';
+import { createInjectionLog } from './injection-log.js';
 
 export const CONTEXT_NAME = 'dsh-memory';
 export const DEFAULT_LIMIT = 6;
@@ -51,7 +52,16 @@ export function stepQuery(messages) {
 /** Pure selection used by the provider: pinned first, then query relevance. */
 export function chooseForContext(memories, query, options = {}) {
   const { now = new Date(), limit = DEFAULT_LIMIT, budget = DEFAULT_BUDGET } = options;
-  return selectMemories(memories, query, { now, scope: 'global', limit, budget });
+  return selectMemories(memories, query, {
+    now,
+    scope: 'global',
+    limit,
+    budget,
+    constraints: options.constraints ?? [],
+    constraintBudget: options.constraintBudget ?? DEFAULT_CONSTRAINT_BUDGET,
+    constraintMaxChars: options.constraintMaxChars ?? DEFAULT_CONSTRAINT_MAX_CHARS,
+    constraintMaxItems: options.constraintMaxItems ?? DEFAULT_CONSTRAINT_MAX_ITEMS,
+  });
 }
 
 /** A compact, string-only description of a scope object, for diagnosis. */
@@ -99,10 +109,17 @@ export function createInjectionRuntime(options = {}) {
   let lastPath = 'none';
   let lastObservePath = 'none';
   let probe = null;
+  const injectionLog = createInjectionLog({ now });
+  let flushed = 0;
+  let constraintState = { usable: [], rejected: [], config: null, fallback: [], loaded: false };
 
   async function refresh() {
     const state = await service.state();
-    snapshot = { at: now().toISOString(), memories: Array.isArray(state.memories) ? state.memories : [] };
+    snapshot = {
+      at: now().toISOString(),
+      head: typeof state.head === 'string' ? state.head : null,
+      memories: Array.isArray(state.memories) ? state.memories : [],
+    };
     return snapshot;
   }
 
@@ -110,7 +127,8 @@ export function createInjectionRuntime(options = {}) {
   function observe(scope, payload) {
     try {
       const text = stepQuery(payload && payload.messages);
-      const entry = { turn: payload && Number.isInteger(payload.turn) ? payload.turn : null, text, at: now().toISOString() };
+      const agentId = payload && payload.agent && typeof payload.agent.id === 'string' ? payload.agent.id : null;
+      const entry = { turn: payload && Number.isInteger(payload.turn) ? payload.turn : null, agentId, text, at: now().toISOString() };
       latest = entry;
       if (scope !== null && typeof scope === 'object') {
         byScope.set(scope, entry);
@@ -118,7 +136,6 @@ export function createInjectionRuntime(options = {}) {
       } else {
         lastObservePath = 'unscoped';
       }
-      const agentId = payload && payload.agent && typeof payload.agent.id === 'string' ? payload.agent.id : null;
       if (agentId !== null) byAgent.set(agentId, entry);
       if (probe === null) probe = { observed: scopeShape(scope), agent: agentId === null ? null : agentId.slice(0, 48) };
       return entry;
@@ -179,12 +196,73 @@ export function createInjectionRuntime(options = {}) {
    */
   function buildText(scope, options2 = {}) {
     const observation = lookup(scope);
-    const chosen = chooseForContext(snapshot.memories, observation.text, {
+    // Precedence: explicit option, then the configured budget, then the default.
+    // The config file is the user's contract; an option is the caller's override.
+    const configuredBudget = constraintState.config !== null && constraintState.config !== undefined && Number.isInteger(constraintState.config.budget)
+      ? constraintState.config.budget
+      : DEFAULT_BUDGET;
+    const budget = Number.isInteger(options2.budget) ? options2.budget : configuredBudget;
+    const limit = options2.limit ?? DEFAULT_LIMIT;
+    const selected = chooseForContext(snapshot.memories, observation.text, {
       now: now(),
-      limit: options2.limit ?? DEFAULT_LIMIT,
-      budget: options2.budget ?? DEFAULT_BUDGET,
+      limit,
+      budget,
+      constraints: constraintState.usable,
+      constraintBudget: constraintState.config === null ? undefined : constraintState.config.constraints.budget,
+      constraintMaxChars: constraintState.config === null ? undefined : constraintState.config.constraints.maxChars,
+      constraintMaxItems: constraintState.config === null ? undefined : constraintState.config.constraints.maxItems,
     });
-    return { text: formatInjection(chosen.chosen), chosen: chosen.chosen, path: lastPath, observation };
+
+    // The selection budget counts bodies; the prompt costs a header, numbering
+    // and labels too. So shrink the selection until the text that will really
+    // be returned fits, and record why each entry left.
+    const excluded = selected.excluded.slice();
+    let chosen = selected.chosen.slice();
+    let rendered = formatInjection(chosen);
+    while (rendered.length > budget && chosen.length > 0) {
+      const dynamic = [...chosen].reverse().find((entry) => entry.kind !== 'constraint');
+      const victim = dynamic ?? chosen[chosen.length - 1];
+      chosen = chosen.filter((entry) => entry !== victim);
+      excluded.push({
+        id: victim.memory && victim.memory.id ? victim.memory.id : null,
+        reason: 'over-budget-after-format',
+        pool: victim.kind === 'constraint' ? 'constraint' : 'dynamic',
+      });
+      rendered = formatInjection(chosen);
+    }
+
+    const memoryIds = chosen.map((entry) => (entry.memory && entry.memory.id ? entry.memory.id : '')).filter((id) => id !== '');
+    const { record, duplicate } = injectionLog.note({
+      sessionId: observation.agentId ?? null,
+      turn: observation.turn ?? null,
+      snapshotHead: snapshot.head ?? null,
+      memoryIds,
+      reasons: chosen.map((entry) => entry.reason),
+      // Audit needs the budget split and the per-entry decision, not the body.
+      pools: selected.pools,
+      memories: chosen.map((entry) => ({
+        id: entry.memory && entry.memory.id ? entry.memory.id : null,
+        kind: entry.kind === 'constraint' ? 'constraint' : 'memory',
+        chars_used: entry.chars_used ?? entry.text.length,
+        reason: String(entry.reason ?? ''),
+      })),
+      excluded: excluded.slice(0, 20).map((entry) => ({ id: entry.id ?? null, reason: entry.reason ?? null })),
+      text: rendered,
+    });
+
+    return {
+      text: rendered,
+      chosen,
+      excluded,
+      path: lastPath,
+      observation,
+      chars: rendered.length,
+      pools: selected.pools,
+      budget,
+      record,
+      duplicate,
+      confirmed: null,
+    };
   }
 
   return {
@@ -208,6 +286,14 @@ export function createInjectionRuntime(options = {}) {
     get probe() { return probe; },
     get agentCount() { return byAgent.size; },
     get snapshot() { return snapshot; },
+    get constraints() { return constraintState; },
+    get log() { return { stats: () => ({ ...injectionLog.stats(), pending: injectionLog.records().length - flushed }), records: () => injectionLog.records() }; },
+    setConstraints(next) {
+      constraintState = next ?? { usable: [], rejected: [], config: null, fallback: [], loaded: false };
+    },
+    pendingRecords() { return injectionLog.records().slice(flushed); },
+    markFlushed(count) { flushed += Math.max(0, Number.isInteger(count) ? count : 0); },
+    get lastInjection() { return injectionLog.records().slice(-1)[0] ?? null; },
     get latestObservation() { return latest; },
   };
 }

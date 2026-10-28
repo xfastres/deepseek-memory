@@ -58,6 +58,7 @@ test('the Host half exposes the ping probe plus the memory routes', () => {
     '/api/dsh-memory/candidates',
     '/api/dsh-memory/candidate',
     '/api/dsh-memory/review',
+    '/api/dsh-memory/injections',
   ]);
   assert.equal(new Set(paths).size, paths.length, 'route paths must be distinct');
   for (const route of routes) {
@@ -152,7 +153,7 @@ test('apply registers every route and the tool through the documented service ac
     effect: (fn) => { fn(); return () => {}; },
   };
   apply(ctx);
-  assert.equal(registered.length, 10);
+  assert.equal(registered.length, 11);
   assert.equal(registered[0].path, PING_PATH);
   assert.equal(tooled.length, 1);
   assert.equal(tooled[0].name, 'dsh_memory_ping');
@@ -162,7 +163,7 @@ test('apply also works when services arrive as context properties', () => {
   const registered = [];
   const webServer = { register(route) { registered.push(route); return () => {}; } };
   apply({ webServer });
-  assert.equal(registered.length, 10);
+  assert.equal(registered.length, 11);
   assert.equal(registered[0].path, PING_PATH);
 });
 
@@ -176,7 +177,7 @@ test('apply never throws and registers the route once a web server exists', () =
   assert.doesNotThrow(() => apply({ get: () => ({ register() { throw new Error('boom'); } }) }));
 
   apply({ get: (name) => (name === 'webServer' ? webServer : undefined), effect: (fn) => { fn(); return () => {}; } });
-  assert.equal(registered.length, 10);
+  assert.equal(registered.length, 11);
   assert.equal(registered[0].path, PING_PATH);
 });
 

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "budget": 800,
+  "constraints": {
+    "budget": 240,
+    "maxChars": 120,
+    "maxItems": 2,
+    "items": [
+      {
+        "memoryId": "M-20261028-5d51484f",
+        "digest": "测试约束（隔离数据）：回答先给结论，再给依据。 不要堆术语。",
+        "sourceDigest": "sha256:5dcebe13d2d62f8e2149d96eed352d0414b880a7026b4474571745aa7820d57b",
+        "method": "deterministic-v1",
+        "addedAt": "2026-10-28T12:08:20.129Z"
+      }
+    ]
+  }
+}

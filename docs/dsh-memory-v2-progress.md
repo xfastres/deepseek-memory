@@ -587,3 +587,223 @@ e02dacb memory(add): M-20261028-64ee2f5f
 ## 累计
 
 **146 项测试通过。** 阶段 2 完成并验证，阶段 3 注入跑通，阶段 4 规则与 L2/L3 纯函数就绪待验证。
+
+## 阶段记录（2026-10-28T09:36:21.015Z）
+
+### A1 复核（已完成）
+- 注入身份：完整 SHA-256（`sha256:` + 64 位小写十六进制），provider 调用数与逻辑记录数分离。
+- 空文本不建记录；`confirmed` 无宿主回执时为 `null`。
+- `selectMemories` 旧调用方式兼容；约束池/普通池独立预算、共同遵守总预算。
+
+### A2 T3 约束配置（已完成）
+- 新增 `host/constraints.js`：`CONFIG_FILE`、`DEFAULT_CONFIG`、`normaliseConfig`、`loadConfig`、`resolveConstraints`。
+- 配置缺失/损坏/越界 → 安全默认值 + `config_fallback` 命名原因，不抛异常。
+- 约束必须存在、active、未过期、作用域相符、非空、≤maxChars、`sourceDigest` 存在且与当前内容一致。
+- 拒绝原因：`not-found / not-active / expired / other-scope / too-short / repetitive / digest-empty / digest-too-long / digest-unverified / digest-stale`。
+- 账本无 `disputed` 状态，未伪造该能力。
+
+### A3 T4 指纹与确定性压缩（已完成）
+- 新增 `host/condense.js`：`normaliseForDigest`（NFC、CRLF→LF、行尾空白、首尾 trim、内部空格不折叠）、`sourceDigestOf`（UTF-8 完整 SHA-256）、`condense`（deterministic-v1，返回 text/dropped/method/sourceDigest）。
+- 保护标记覆盖否定/条件/顺序/例外/必要条件；保护句放不下时整条拒绝（`protected-sentence-too-long`），不截断。
+- **实测限制**：真实记忆 M-20261028-35738656 在 120/240/400/600 字上限下均被拒绝（几乎每句都含保护标记）。这是设计要求的行为，真实运行验收改用“手工摘要 + 脚本指纹”。
+
+### B T5–T10 接入（已完成）
+- `injection.js`：`chooseForContext` 透传 constraints 选项；`setConstraints`；`buildText` 以**最终格式化文本**为准做预算收缩（`over-budget-after-format` 命名排除），并写注入日志；`pendingRecords` / `markFlushed` / `log.stats`。
+- `runtime-store.js`：`recordInjection` 增补 `key / snapshot_head / state / confirmed / evidence / occurrences / pools / memories / excluded`，全部向后兼容；`confirmed` 只有带证据时才是 `true`。
+- `index.js`：pre-step 边界调用 `refreshConstraints()` 与 `flushInjections()`（provider 内不写盘，失败保留队列重试）；诊断新增 `constraints / injection_log / flush`。
+- `http-app.js` + `APP_ROUTE_NAMES`：新增 `GET /api/dsh-memory/injections`（limit 1..200，非法 400，非 GET 405，非回环 403）。
+- 客户端、账本 schema、LLM 摘要：均未触碰。
+
+### C 测试（已完成）
+- 新增测试文件：`constraints.test.mjs`(15)、`injections.test.mjs`(11)、`diagnostics.test.mjs`(3)、`constraints-pool.test.mjs`(11)、`injection-log.test.mjs`(10)。
+- 全量：**209 通过 / 0 失败**（node --test --test-force-exit）。
+
+### D 真实运行（待用户执行）
+- 见 `docs/dsh-memory-phase4-acceptance.md`；需要重启 DSH 才能加载新的 Host half。
+- 未验证：真实 provider 注入块内容与预算、`/injections` 的真实返回、重启后持久化、`flush` 实际成功状态。
+
+## 可交付版说明（2026-10-28 晚，第二轮迭代）
+
+### 1. 模块职责
+
+| 模块 | 为什么存在 | 输入 | 输出 | 失败时 |
+|---|---|---|---|---|
+| `host/ledger-service.js` | 记忆的唯一真相源（git 账本） | 内容 + 证据引用 | 记录/状态 | 抛带 code 的错误，HTTP 层映射 4xx/5xx |
+| `host/retrieval.js` | 决定“哪条记忆进提示” | 记忆列表、query、预算 | chosen/excluded/used/pools | 从不抛错，逐条给排除原因 |
+| `host/condense.js` | 把长记忆压成可常驻的摘要 | 原文、maxChars | {text, dropped, method, sourceDigest} | 返回 `ok:false` + 具名原因，不截断 |
+| `host/constraints.js` | 读取并校验常驻约束配置 | `injection.json`、当前记忆 | usable/rejected/fallback | 任何异常都回落默认值 + 原因 |
+| `host/injection.js` | 在 prompt 组装时产出最终文本 | scope、快照、约束 | text/chars/record | 内部 try/catch，最坏返回空串 |
+| `host/injection-log.js` | 记录“实际注入了什么” | session/turn/snapshot/ids/text | 逻辑记录（去重合并） | 空文本不记录，只计数 |
+| `host/runtime-store.js` | 候选与注入记录的持久化 | 变更函数 | runtime.json | 串行队列 + 文件锁；损坏时拒绝覆盖 |
+| `index.js` | 接线：路由、工具、pre-step、诊断 | Cordis ctx | 注册项 | 每个注册独立 attempt，互不牵连 |
+
+### 2. 完整调用链
+
+```mermaid
+flowchart TD
+  A[用户消息] --> B[agent/pre-step]
+  B --> C{injection.observe}
+  C -->|取最后一条 user/message| D[ensureFresh: service.state]
+  D --> E[snapshot: at/head/memories]
+  E --> F[refreshConstraints: loadConfig + resolveConstraints]
+  F --> G[flushInjections: 排队记录顺序落盘]
+  G --> H[ensureContext]
+  H -->|有 active 记忆才注册| I[systemPrompt.context dsh-memory]
+  I --> J[provider 被宿主调用]
+  J --> K[buildText: selectMemories]
+  K --> L[formatInjection 最终文本]
+  L --> M{length > budget?}
+  M -->|是| N[丢最后一条普通记忆, 记 over-budget-after-format] --> L
+  M -->|否| O[injectionLog.note]
+  O --> P[返回文本给模型]
+```
+
+### 3. 注入记录状态
+
+```mermaid
+stateDiagram-v2
+  [*] --> Returned: provider 返回非空文本
+  [*] --> Dropped: 文本为空(仅计数)
+  Returned --> Returned: 同 turn 同文本重复调用(occurrences+1)
+  Returned --> Confirmed: 仅当宿主给出回执(当前不存在此 API)
+  Confirmed --> [*]
+  Returned --> [*]: 落盘 runtime.json
+```
+
+> `confirmed` 目前恒为 `null`。`prepared` 不作为独立持久状态：选择与返回在同一次同步调用内完成，没有可观测间隙。
+
+### 4. 配置与默认值
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `budget` | 800 | 最终格式化文本上限（含标题/序号/标签） |
+| `constraints.budget` | 240 | 约束池预算 |
+| `constraints.maxChars` | 120 | 单条约束摘要上限；超限拒绝，不截断 |
+| `constraints.maxItems` | 2 | 约束条数上限 |
+| `selectMemories` 的 `limit` | 8 | 普通记忆条数上限 |
+| `selectMemories` 的 `budget` | 800 | 与配置文件一致（由注入层传入） |
+
+**单位定义**：预算与 `chars` 都是 JS 字符串长度（UTF-16 码元）；CJK 常用字 1 = 1 字符。`sourceDigest` 用 UTF-8 字节算 SHA-256。
+
+### 5. 测试命令与真实结果
+
+```
+node --test --test-force-exit packages/dsh-memory/test/*.test.mjs
+ℹ tests 219  pass 219  fail 0  skipped 0  duration_ms 20511
+```
+
+分文件：client 23 / host 19 / host-http 5 / http-app 11 / session-evidence 13 / retrieval 17 / retrieval-eval 4 / runtime-store 10 / injection 21 / extraction 11 / scenarios 8 / persona 8 / migration 7 / ledger-service 8 / injection-log 10 / constraints-pool 11 / constraints 15 / injections 11 / diagnostics 3 / robustness 10。
+
+### 6. 已验证 / 未验证
+
+| 项 | 状态 |
+|---|---|
+| 摘要安全拒绝、手工摘要 + 指纹校验、`digest-stale` | 自动化测试通过 |
+| 双池预算、最终格式化文本预算、配置预算优先级 | 自动化测试通过 |
+| 注入身份去重（calls=2 / records=1 / occurrences=2）、空文本不记录、`confirmed=null` | 自动化测试通过 |
+| 并发 20 次写入无丢失（读-改-写串行） | 自动化测试通过 |
+| 插件真实注册契约（路由/工具/pre-step/诊断/只读路由） | 契约级测试通过（stand-in 宿主） |
+| 真实 DSH 进程加载、真实 provider 返回、真实 `/injections` 响应 | **未验证** |
+
+### 7. 隔离环境
+
+- Profile：`F:\dsh-memory-test-home\profiles\memory-test`（仅 `cordis.patch.yml`/`package.json`，无 `node_modules`，未安装 dsh-memory bundle）。
+- 数据目录用环境变量隔离：`DSH_MEMORY_DATA_DIR=F:\dsh-memory-test-home\data`。
+- 自动化测试已按该方式隔离（每个测试用独立临时目录），不触碰生产 `~/.dsh/dsh-memory`。
+- 真实宿主验收步骤见 `docs/dsh-memory-phase4-acceptance.md`；未执行，不宣称通过。
+
+### 8. 本轮发现与修改
+
+| 问题 | 处理 |
+|---|---|
+| `buildText` 忽略配置文件里的 `budget`，只用内置 800 | 改为 选项 > 配置 > 默认 优先级，并加测试 |
+| flush 用 `Promise.all` 并发写 | 改为顺序写，保持记录顺序；底层 store 已串行化整个读-改-写 |
+| flush 把 `memory_ids` 当 `reasons` 存 | 日志新增真实 `reasons`（每条被选原因），落盘映射修正 |
+| 空账本时 provider 不注册（`no-active-memory`） | 确认为有意的守卫，测试断言该诊断值 |
+| 1136 字记忆无法自动压缩 | 保持拒绝；提供手工摘要路径（`method:'manual'` + `sourceDigest`），测试覆盖 |
+
+### 9. 已知限制
+
+1. 无法自动压缩“几乎每句都是规则”的长散文；120 字内不可能保留全部否定/条件/顺序，因此拒绝是正确行为。
+2. `confirmed` 无宿主回执 API，恒为 `null`。
+3. 去重粒度是 turn（宿主不暴露 step），同 turn 内文本相同的两次调用合并为一条。
+4. 多会话时 scope 无法枚举，靠 agent id 匹配，多个 agent 时降级为 `ambiguous` 并丢弃 query。
+5. 真实进程内的并发 flush 与文件锁交互未实测，仅有单进程串行性证据。
+
+## 第三轮记录（2026-10-28T12:10:19.930Z）
+
+### 基线核实
+- HEAD `eecc18e`，18 项未提交改动，`git diff --check` 通过。
+- 重跑全量：**223 通过 / 0 失败**（上一轮 219，+4 为本轮新增验收脚本测试）。
+- 核实到的真实事实：生产 profile 用 **junction 直连源码**（无打包步骤）；数据目录 `<data>/ledger` 与 `<data>/runtime/runtime.json`；`DSH_MEMORY_DATA_DIR` 在 `resolveDataDir()` 中读取；**代码中不存在 `DSH_MEMORY_DIGEST` 和 `scripts/make-injection-config.mjs`**（上一轮报告的错误，已修正文档）。
+
+### 本轮改动
+| 文件 | 原因 |
+|---|---|
+| `scripts/prepare-isolated-acceptance.mjs`（新） | 幂等生成隔离 fixture 记忆 + `injection.json`，拒绝生产路径，回读校验 |
+| `packages/dsh-memory/test/prepare-acceptance.test.mjs`（新，4 项） | 拒绝生产路径、指纹正确、二次执行不变、fixture 可识别 |
+| `docs/dsh-memory-phase4-acceptance.md`（重写） | 按核实的加载链路、数据路径、脚本与排查表重写 |
+| `docs/dsh-memory-injection.example.json`（更新） | 改为 fixture 生成的示例，与实现一致 |
+
+### 本轮修复的缺陷
+1. 脚本的跨盘符路径守卫误判（`relative()` 跨盘返回绝对路径）→ 修正。
+2. 脚本用了账本不接受的 `type: 'instruction'`（合法值含 `constraint`）→ 改为 `constraint`。
+3. 测试 import 相对深度错误 ×2 → 修正。
+
+### 仍未验证
+- 真实 DSH 进程加载新代码、provider 真实返回、`/injections` 真实响应、重启后持久化。
+- 跨进程文件锁语义。
+
+## 第四轮记录（2026-10-28T12:21:48.445Z）
+
+### 只读审查结论
+- `scripts/prepare-isolated-acceptance.mjs` 守卫正确（生产目录与 `$HOME/.dsh` 一律拒绝，已测）；`--dry-run` 不写盘。
+- 加载链路确认：`node_modules/@local/dsh-memory` 为 **Junction → F:\deepseek-memory\packages\dsh-memory**，Host half 随进程启动加载。
+- `DSH_MEMORY_DATA_DIR` 在 `resolveDataDir()` 中读取，调用点为 198/307/438 行，属 lazy 读取。
+- **文档错误已修**：只读路由允许"回环但无 same-origin 头"（实测 200），原文档写成 403。
+
+### 真实宿主证据（生产 profile，只读）
+- `runtime/runtime.json` 已有 turn 95–98 四条注入记录；`/api/dsh-memory/injections?limit=5` 返回同一批数据。
+- `occurrences` 实测为 1（turn 95）与 2（turn 96–98）——不能预设固定值。
+- 用当前代码重新渲染同一条记忆：**435 字符**，与宿主记录 `chars` 完全一致。
+- `limit=abc` → 400；无 same-origin 头但回环 → 200（符合 `isTrustedRead` 实现）。
+
+### 未验证
+- provider 文本是否真正进入模型提示（无回执 API）；隔离 profile 端到端。
+
+## 第五轮记录（2026-10-28T12:30:46.568Z）
+
+### 发现的真实缺口并已修复
+- 注入记录此前只有 `reasons`（字符串），**没有池分配与逐条决策**：`pools/memories/excluded` 在日志记录里不存在，落盘恒为 `null/[]/[]`。本轮打通：`buildText` 把 `selected.pools`、每条 `{id, kind, chars_used, reason}`、排除项 `{id, reason}` 交给 `injection-log`，再由 `index.js` 的 `writeAll()` 落盘。新增测试断言这些字段存在、且**不含正文**。
+- 落盘形状已用真实文件往返验证（临时目录）：`pools.constraint.used / pools.dynamic.used / memories[].reason / excluded[]` 均在 `runtime.json` 中。
+
+### 旧记录策略（明确）
+- 四条历史记录（turn 95–98）**保留原样，不回填**：它们是当时进程实际写出的事实，补写等于伪造。
+- 读取路径对缺失字段容忍（`key ?? null`、`state ?? 'returned'`），已有测试覆盖。
+- 新记录（重启后）会带完整字段；**在该证据出现前，不声称 `pools` 已通过宿主验证**。
+
+### 隔离宿主
+- 只读检查未发现可从命令行启动 DSH 的入口（`F:\DsspSeekHarness\resources` 只有 `app.asar`），我**没有**尝试启动第二个实例，也没有重启生产 DSH。
+- 隔离验收仍需你按 `docs/dsh-memory-phase4-acceptance.md` 的 C/D 段执行。
+
+## 第六轮记录（2026-10-28T12:49:23.969Z）— UI 与测试
+
+### 页面结构（只读确认）
+唯一页面：主区 `memory`（工作记忆）+ 侧边栏入口。功能：今天的轮次时间线、轮次详情/会话原文、记下这一轮（候选）、候选复核（接受/拒绝/合并）、正式记忆编辑与历史、本地导入导出、Host 探测与迁移、账本只读列表。
+
+### UI 改动（仅样式与展示层）
+- 设计令牌：`.dm-page` 内统一圆角/间距/阴影（`--dm-r-*`、`--dm-space-*`、`--dm-shadow-1`）。
+- 焦点：所有可交互元素共享一条 `:focus-visible` 规则（此前 back/link/textarea/select 无可见焦点）。
+- 层级：刷新/重试标为唯一主操作 `.dm-primary`；Host 测试降为 `.dm-quiet`；导出/导入保持次级。
+- 状态：连接状态从纯文本改为"圆点 + 文本 + data-status"（不靠颜色单独表达）；加载态由一行文字改为文本 + 两条骨架（无伪造数据）；错误块补充背景与说明排版。
+- 溢出：长 ID/摘要/无空格文本 `overflow-wrap:anywhere`，flex 子项 `min-width:0`，表格横向滚动，内容区 `scrollbar-gutter:stable`。
+- 响应式：新增 720px 断点（页边距、卡片内边距、操作区换行），保留 600px 断点。
+- 交互守卫：Host 测试与迁移请求进行中禁用按钮并忽略重复调用（新增 `pingPending`/`migrating` 两个展示态，不改任何接口契约）。
+
+### 新增测试
+`test/client-ui.test.mjs`（4 项）：样式契约（焦点/状态/骨架/溢出/断点/主操作为一条共享规则）、加载态组件树静态渲染（有骨架、无伪造记忆、无假错误）、头部唯一主操作且加载时禁用、状态行"文本 + 装饰圆点 + data-status"。
+
+### 安全审查
+- 未发现凭据、API key、Bearer token、密码写法。
+- 仓库内（排除 `tmp/`）未发现生产会话 ID、生产记忆正文；`tmp/l0-live-sessions/` 是既有本地工件且被 `.gitignore` 忽略，未纳入提交，本轮未删除。
+- 未修改生产数据、未重启 DSH、未启动第二实例。

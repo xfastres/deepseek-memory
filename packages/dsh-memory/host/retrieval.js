@@ -6,6 +6,19 @@
 // budgeted, deterministic pass over eligible memories. There is no vector
 // index here yet, on purpose: a score nobody can read cannot be debugged.
 
+/**
+ * Budget fallbacks.
+ *
+ * Every one of these is an option on selectMemories; the constants exist only
+ * so a caller with no opinion still gets a documented, tunable value instead of
+ * a number that appeared inside the loop.
+ */
+export const DEFAULT_SELECT_LIMIT = 8;
+export const DEFAULT_SELECT_BUDGET = 800;
+export const DEFAULT_CONSTRAINT_BUDGET = 240;
+export const DEFAULT_CONSTRAINT_MAX_CHARS = 120;
+export const DEFAULT_CONSTRAINT_MAX_ITEMS = 2;
+
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
 const WORD = /[a-z0-9]+/giu;
 
@@ -163,10 +176,75 @@ export function scoreMemory(memory, query, options = {}) {
  * non-zero-lexical when a query exists, and within the character budget.
  */
 export function selectMemories(memories, query, options = {}) {
-  const { now = new Date(), scope = 'global', limit = 8, budget = 1200, includePrivate = false } = options;
+  const {
+    now = new Date(),
+    scope = 'global',
+    limit = DEFAULT_SELECT_LIMIT,
+    budget = DEFAULT_SELECT_BUDGET,
+    includePrivate = false,
+    constraints = [],
+    constraintBudget = DEFAULT_CONSTRAINT_BUDGET,
+    constraintMaxChars = DEFAULT_CONSTRAINT_MAX_CHARS,
+    constraintMaxItems = DEFAULT_CONSTRAINT_MAX_ITEMS,
+  } = options;
   const hasQuery = typeof query === 'string' && query.trim() !== '';
-  const scored = [];
   const excluded = [];
+
+  // Pool one: standing constraints, injected as digests rather than full text.
+  const constraintPool = { budget: constraintBudget, used: 0 };
+  const chosenConstraints = [];
+  const constraintItems = Array.isArray(constraints) ? constraints : [];
+  for (const item of constraintItems) {
+    const memory = item && item.memory ? item.memory : null;
+    const id = memory !== null && typeof memory.id === 'string' ? memory.id : null;
+    if (memory === null) {
+      excluded.push({ id, reason: 'missing-memory', pool: 'constraint' });
+      continue;
+    }
+    // Validity, correction and quality are checked first: a constraint is a
+    // convenience, never a way around these rules.
+    const reason = eligibility(memory, { now, scope, includePrivate });
+    if (reason !== null) {
+      excluded.push({ id, reason, pool: 'constraint' });
+      continue;
+    }
+    const digest = typeof item.digest === 'string' ? item.digest.trim() : '';
+    if (digest === '') {
+      excluded.push({ id, reason: 'digest-empty', pool: 'constraint' });
+      continue;
+    }
+    // A digest longer than its cap is refused, never silently cut: a trimmed
+    // constraint can change its meaning.
+    if (digest.length > constraintMaxChars) {
+      excluded.push({ id, reason: 'digest-too-long', pool: 'constraint' });
+      continue;
+    }
+    if (chosenConstraints.length >= constraintMaxItems) {
+      excluded.push({ id, reason: 'over-constraint-limit', pool: 'constraint' });
+      continue;
+    }
+    if (constraintPool.used + digest.length > constraintPool.budget) {
+      excluded.push({ id, reason: 'over-constraint-budget', pool: 'constraint' });
+      continue;
+    }
+    if (constraintPool.used + digest.length > budget) {
+      excluded.push({ id, reason: 'over-budget', pool: 'constraint' });
+      continue;
+    }
+    constraintPool.used += digest.length;
+    chosenConstraints.push({
+      memory,
+      kind: 'constraint',
+      text: digest,
+      clipped: false,
+      chars_original: String(memory.content ?? '').length,
+      chars_used: digest.length,
+      reason: '常驻约束（精简版）',
+    });
+  }
+
+  // Pool two: ordinary memories, scored exactly as before.
+  const scored = [];
   for (const memory of memories) {
     const reason = eligibility(memory, { now, scope, includePrivate });
     if (reason !== null) {
@@ -193,29 +271,40 @@ export function selectMemories(memories, query, options = {}) {
     return String(left.memory.id).localeCompare(String(right.memory.id));
   });
 
-  const chosen = [];
-  let used = 0;
+  const dynamicPool = { budget: Math.max(0, budget - constraintPool.used), used: 0 };
+  const chosenDynamic = [];
   for (const entry of scored) {
-    if (chosen.length >= limit) {
+    if (chosenDynamic.length >= limit) {
       excluded.push({ id: entry.memory.id, reason: 'over-limit' });
       continue;
     }
     const isPinned = entry.score.parts.pinned;
     const full = String(entry.memory.content ?? '').replace(/\s+/g, ' ').trim();
     const cost = Math.min(full.length, MAX_MEMORY_CHARS);
-    if (!isPinned && used + cost > budget) {
+    if (!isPinned && dynamicPool.used + cost > dynamicPool.budget) {
       excluded.push({ id: entry.memory.id, reason: 'over-budget' });
       continue;
     }
-    used += cost;
-    chosen.push({
+    dynamicPool.used += cost;
+    chosenDynamic.push({
       ...entry,
       text: clipContent(full, MAX_MEMORY_CHARS),
       clipped: full.length > MAX_MEMORY_CHARS,
+      chars_original: full.length,
+      chars_used: Math.min(full.length, MAX_MEMORY_CHARS),
       reason: explain(entry, hasQuery),
     });
   }
-  return { chosen, excluded, used, budget };
+
+  const chosen = [...chosenConstraints, ...chosenDynamic];
+  const used = constraintPool.used + dynamicPool.used;
+  return {
+    chosen,
+    excluded,
+    used,
+    budget,
+    pools: { constraint: constraintPool, dynamic: dynamicPool },
+  };
 }
 
 /**

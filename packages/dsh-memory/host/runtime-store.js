@@ -191,6 +191,18 @@ export function createRuntimeStore(options = {}) {
           memory_ids: memoryIds,
           reasons: Array.isArray(record.reasons) ? record.reasons.slice(0, 20) : [],
           chars: Number.isFinite(record.chars) ? record.chars : 0,
+          // Additive fields. Old files simply lack them, and nothing here reads
+          // a missing field as empty rather than as absent.
+          key: typeof record.key === 'string' ? record.key : null,
+          snapshot_head: typeof record.snapshotHead === 'string' ? record.snapshotHead : null,
+          state: typeof record.state === 'string' ? record.state : 'returned',
+          // A receipt from the host is the only thing that may set this true.
+          confirmed: record.confirmed === true && typeof record.evidence === 'string' ? true : null,
+          evidence: typeof record.evidence === 'string' ? record.evidence : null,
+          occurrences: Number.isInteger(record.occurrences) && record.occurrences > 0 ? record.occurrences : 1,
+          pools: record.pools !== null && typeof record.pools === 'object' ? record.pools : null,
+          memories: Array.isArray(record.memories) ? record.memories.slice(0, 20) : [],
+          excluded: Array.isArray(record.excluded) ? record.excluded.slice(0, 50) : [],
         };
         document.injections.push(entry);
         return entry;

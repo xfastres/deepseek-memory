@@ -24,6 +24,7 @@ import {
   writeJson,
 } from './host/http-app.js';
 import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
+import { loadConfig, resolveConstraints } from './host/constraints.js';
 import { extractCandidates } from './host/extraction.js';
 
 export { API_PREFIX, isTrustedWrite, writeJson };
@@ -33,7 +34,7 @@ export const PING_PATH = `${API_PREFIX}/ping`;
 
 /** Routes served by the memory application, in addition to the ping probe. */
 export const APP_ROUTE_NAMES = Object.freeze([
-  'state', 'export', 'add', 'update', 'retract', 'migrate', 'candidates', 'candidate', 'review',
+  'state', 'export', 'add', 'update', 'retract', 'migrate', 'candidates', 'candidate', 'review', 'injections',
 ]);
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -313,6 +314,23 @@ export function apply(ctx) {
   const status = () => ({
     ...injectionSnapshot(injection, contextState),
     context: contextState === undefined || contextState === null ? null : { ...contextState },
+    constraints: (() => {
+      const state = injection.constraints;
+      return {
+        loaded: state.loaded === true,
+        usable: Array.isArray(state.usable) ? state.usable.length : 0,
+        rejected: Array.isArray(state.rejected) ? state.rejected.slice(0, 6) : [],
+        fallback: Array.isArray(state.fallback) ? state.fallback.slice(0, 6) : [],
+        budget: state.config === null || state.config === undefined ? null : {
+          total: state.config.budget,
+          constraint: state.config.constraints.budget,
+          maxChars: state.config.constraints.maxChars,
+          maxItems: state.config.constraints.maxItems,
+        },
+      };
+    })(),
+    injection_log: injection.log.stats(),
+    flush: { ...flushState },
     candidates: proposed.length,
     candidate_sample: proposed.slice(0, 2).map((entry) => ({ type: entry.type, rule: entry.rule, confidence: entry.confidence, text: entry.text.slice(0, 60) })),
   });
@@ -357,6 +375,72 @@ export function apply(ctx) {
           }
         }))
       .catch(() => {});
+  };
+
+  const flushState = { ok: null, error: null, written: 0 };
+  /**
+   * Persist queued injection records at a step boundary.
+   *
+   * The provider never touches the disk: records are queued while assembling
+   * and written here, where waiting is already acceptable and a second writer
+   * cannot be running. A failure keeps the queue so the next boundary retries.
+   */
+  const flushInjections = () => {
+    const pending = injection.pendingRecords();
+    if (pending.length === 0) return;
+    let app;
+    try {
+      app = getApp();
+    } catch (error) {
+      flushState.ok = false;
+      flushState.error = String(error && error.message ? error.message : error).slice(0, 120);
+      return;
+    }
+    // Sequential on purpose: the store serialises whole-file read-modify-write,
+    // and doing them one at a time keeps the on-disk order equal to the order in
+    // which the records were produced.
+    const writeAll = async () => {
+      for (const record of pending) {
+        await app.runtime.recordInjection({
+          sessionId: record.session_id,
+          turn: record.turn,
+          snapshotHead: record.snapshot_head,
+          memoryIds: record.memory_ids,
+          reasons: Array.isArray(record.reasons) ? record.reasons : [],
+          chars: record.chars,
+          key: record.key,
+          state: record.state,
+          confirmed: record.confirmed,
+          evidence: record.evidence,
+          occurrences: record.occurrences,
+          pools: record.pools,
+          memories: record.memories,
+          excluded: record.excluded,
+        });
+      }
+    };
+    writeAll()
+      .then(() => {
+        injection.markFlushed(pending.length);
+        flushState.ok = true;
+        flushState.error = null;
+        flushState.written += pending.length;
+      })
+      .catch((error) => {
+        flushState.ok = false;
+        flushState.error = String(error && error.message ? error.message : error).slice(0, 120);
+      });
+  };
+
+  /** Re-resolve the standing constraints against the current ledger snapshot. */
+  const refreshConstraints = () => {
+    try {
+      const loaded = loadConfig(resolveDataDir());
+      const resolved = resolveConstraints({ config: loaded.config, memories: injection.snapshot.memories, now: new Date() });
+      injection.setConstraints({ ...loaded, ...resolved });
+    } catch (error) {
+      injection.setConstraints({ loaded: false, fallback: ['resolve-failed'], usable: [], rejected: [], config: null });
+    }
   };
 
   const systemPrompt = service(ctx, 'systemPrompt');
@@ -449,6 +533,8 @@ export function apply(ctx) {
           contextState.error = `refresh: ${String(error && error.message ? error.message : error).slice(0, 120)}`;
         })
         .then(() => {
+          refreshConstraints();
+          flushInjections();
           ensureContext();
         })
         .then(() => next());

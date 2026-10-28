@@ -902,6 +902,8 @@ window.__ModuleLoader__.load({
       const [edits, setEdits] = useState({});
       const [notice, setNotice] = useState('');
       const [ping, setPing] = useState('');
+      const [pingPending, setPingPending] = useState(false);
+      const [migrating, setMigrating] = useState(false);
       const [host, setHost] = useState({ status: 'probing', count: 0, head: null, reason: '' });
       /** Ledger contents read from the Host, shown read-only beside the local store. */
       const [ledger, setLedger] = useState([]);
@@ -921,6 +923,8 @@ window.__ModuleLoader__.load({
       };
       useEffect(() => { probeHost(); }, []);
       const testHost = () => {
+        if (pingPending) return;
+        setPingPending(true);
         setPing(t('pingWaiting'));
         const failed = (status) => setPing(t('pingFailed').replace('{status}', String(status)));
         const controller = new AbortController();
@@ -945,16 +949,19 @@ window.__ModuleLoader__.load({
           }, (error) => {
             setPing(error && error.name === 'AbortError' ? t('pingTimeout') : failed('network'));
           })
-          .then(() => clearTimeout(timer), () => clearTimeout(timer));
+          .then(() => { clearTimeout(timer); setPingPending(false); }, () => { clearTimeout(timer); setPingPending(false); });
       };
       const migrateToHost = () => {
-        if (host.status !== 'ok' || typeof fetch !== 'function') return;
+        if (migrating || host.status !== 'ok' || typeof fetch !== 'function') return;
+        setMigrating(true);
         setNotice(t('migrateSending'));
         const client = createHostClient(fetch);
         client.migrate({ memories: loadStored(FORMAL_KEY), candidates: loadStored(CANDIDATES_KEY) }).then((result) => {
+          setMigrating(false);
           setNotice(migrationSummary(result, t));
           probeHost();
         }, (error) => {
+          setMigrating(false);
           setNotice(t('migrateFailed').replace('{reason}', (error && error.reason) || 'network'));
         });
       };
@@ -1067,25 +1074,28 @@ window.__ModuleLoader__.load({
             }),
             h('button', {
               type: 'button',
-              className: 'dm-refresh',
+              className: 'dm-refresh dm-quiet',
+              disabled: pingPending,
               onClick: testHost,
             }, t('testHost')),
             h('button', {
               type: 'button',
-              className: 'dm-refresh',
+              className: 'dm-refresh dm-primary',
               disabled: state.status === 'loading',
               onClick: () => setRevision((value) => value + 1),
             }, t(state.status === 'error' ? 'retry' : 'refresh')))),
         h('main', { className: 'dm-content' },
-          notice ? h('p', { className: 'dm-muted', role: 'status' }, notice) : null,
-          h('p', { className: 'dm-muted', role: 'status' }, hostLine(host, t)),
+          notice ? h('p', { className: 'dm-notice-line', role: 'status' }, notice) : null,
+          h('p', { className: 'dm-statusline', role: 'status', 'data-status': host.status },
+            h('span', { className: 'dm-dot', 'aria-hidden': true }),
+            h('span', null, hostLine(host, t))),
           host.status === 'ok' && memories.length > 0
-            ? h('button', { type: 'button', className: 'dm-refresh', onClick: migrateToHost }, t('migrateButton').replace('{count}', String(memories.length)))
+            ? h('button', { type: 'button', className: 'dm-refresh', disabled: migrating, onClick: migrateToHost }, t('migrateButton').replace('{count}', String(memories.length)))
             : null,
           host.status === 'ok' && ledger.length > 0
             ? h('section', { className: 'dm-ledger' },
               h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(ledger.length))),
-              h('ul', { className: 'dm-muted' }, ledgerView(ledger).map((row) => h('li', { key: row.id }, `${row.active ? t('ledgerActive') : t('ledgerInactive')} · ${row.text}`))))
+              h('ul', { className: 'dm-ledger-list' }, ledgerView(ledger).map((row) => h('li', { key: row.id }, `${row.active ? t('ledgerActive') : t('ledgerInactive')} · ${row.text}`))))
             : null,
           ping ? h('p', { className: 'dm-muted', role: 'status' }, ping) : null,
           state.status === 'error'
@@ -1093,7 +1103,10 @@ window.__ModuleLoader__.load({
               h('strong', null, t('readError')), h('p', null, state.error))
             : null,
           state.status === 'loading' && !data
-            ? h('p', { className: 'dm-muted', role: 'status' }, t('loading'))
+            ? h('div', { className: 'dm-loading', role: 'status' },
+              h('p', { className: 'dm-muted dm-loading-text' }, t('loading')),
+              h('div', { className: 'dm-skeleton', 'aria-hidden': true }),
+              h('div', { className: 'dm-skeleton dm-skeleton-short', 'aria-hidden': true }))
             : null,
           data
             ? h(React.Fragment, null,
@@ -1183,7 +1196,9 @@ window.__ModuleLoader__.load({
       .dm-page{height:100%;display:flex;flex-direction:column;box-sizing:border-box;padding:0 clamp(24px,4vw,48px);color:var(--dsw-alias-label-primary)}
       .dm-header{flex:none;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:28px 0 24px}
       .dm-title{margin:0;font-size:20px;font-weight:500;line-height:28px}.dm-intro{margin:4px 0 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}
-      .dm-refresh{flex:none;border:0.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:6px 12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:12px}
+      .dm-refresh{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:4px;min-height:30px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:8px;padding:6px 12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:12px}
+      .dm-primary{background:var(--dsw-alias-bg-layer-2);font-weight:500}
+      .dm-quiet{color:var(--dsw-alias-label-secondary)}
       .dm-actions{display:flex;align-items:center;gap:8px;flex:none}
       .dm-refresh:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dm-refresh:disabled{opacity:.5;cursor:default}
       .dm-refresh:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
@@ -1194,7 +1209,8 @@ window.__ModuleLoader__.load({
       .dm-card{display:block;width:min(760px,100%);border:0.5px solid var(--dsw-alias-border-l3);border-radius:10px;background:var(--dsw-alias-bg-layer-1);padding:16px 18px;text-align:left;color:inherit;font:inherit;cursor:pointer}
       .dm-card:hover{background:var(--dsw-alias-interactive-bg-hover)}.dm-card:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
       .dm-open{display:block;margin-top:12px;color:var(--dsw-alias-label-tertiary);font-size:12px}
-      .dm-conversation{height:100%;display:flex;flex-direction:column;padding:24px 0}.dm-back{align-self:flex-start;border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font:inherit;font-size:13px;padding:0}
+      .dm-conversation{height:100%;display:flex;flex-direction:column;padding:24px 0}.dm-back{align-self:flex-start;display:inline-flex;align-items:center;min-height:26px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font:inherit;font-size:13px;padding:2px 6px;margin-left:-6px}
+      .dm-back:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
       .dm-conversation-header{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin:18px 0;padding-bottom:14px;border-bottom:0.5px solid var(--dsw-alias-border-l3)}
       .dm-turn-box{max-width:820px;margin-bottom:18px;padding:14px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
       .dm-turn-box-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.dm-remember{width:auto;flex:none;border:0.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:6px 10px;background:var(--dsw-alias-bg-base);color:inherit;font:inherit;font-size:12px;cursor:pointer}
@@ -1229,7 +1245,43 @@ window.__ModuleLoader__.load({
       .dm-review-card{display:flex;flex-direction:column;gap:10px}.dm-outcome{align-self:flex-start;padding:2px 8px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);font-size:12px}
       .dm-review-card h3{margin:0 0 4px;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:500}.dm-review-card section{padding:10px;border-radius:8px;background:var(--dsw-alias-bg-base)}
       .dm-review-actions{display:flex;gap:12px;align-items:center}.dm-merge{display:flex;flex-direction:column;gap:6px;color:var(--dsw-alias-label-secondary);font-size:12px}.dm-merge select{max-width:420px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:6px 8px;background:var(--dsw-alias-bg-base);color:inherit;font:inherit}
-      @media(max-width:600px){.dm-header{flex-wrap:wrap}.dm-status{margin-left:0}.dm-dayline{align-items:flex-start;flex-direction:column;gap:4px}}
+      @media(max-width:600px){.dm-header{flex-wrap:wrap}.dm-status{margin-left:0}.dm-dayline{align-items:flex-start;flex-direction:column;gap:4px}.dm-actions{flex-wrap:wrap}}
+
+      /* ---- design tokens: one scale for spacing, radius and elevation ---- */
+      .dm-page{--dm-r-sm:8px;--dm-r-md:12px;--dm-r-lg:16px;--dm-space-1:4px;--dm-space-2:8px;--dm-space-3:12px;--dm-space-4:16px;--dm-space-5:24px;--dm-shadow-1:0 1px 2px rgba(15,23,42,.05)}
+      .dm-card,.dm-message,.dm-turn-box,.dm-memory-bank article{box-shadow:var(--dm-shadow-1)}
+      .dm-card,.dm-message,.dm-turn-box{border-radius:var(--dm-r-md)}
+      .dm-memory-bank article{border-radius:var(--dm-r-md)}
+
+      /* ---- focus: every interactive element gets the same visible ring ---- */
+      .dm-page :is(button, a, summary, select, textarea, [tabindex]):focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:var(--dm-r-sm)}
+      .dm-link:hover,.dm-remember:hover,.dm-memory-bank>summary:hover{color:var(--dsw-alias-label-primary)}
+      .dm-remember:hover{background:var(--dsw-alias-interactive-bg-hover)}
+
+      /* ---- overflow: long ids, digests and unbroken text never widen the page ---- */
+      .dm-header>div,.dm-meta,.dm-conversation-header,.dm-turn-box-header,.dm-memory-card-head,.dm-dayline>*{min-width:0}
+      .dm-muted,.dm-statusline,.dm-notice-line,.dm-ledger-list,.dm-meta,.dm-source code,.dm-conversation-header code,.dm-card,.dm-message,.dm-memory-bank article,.dm-formatted,.dm-warning{overflow-wrap:anywhere}
+      .dm-content{scrollbar-gutter:stable;overscroll-behavior:contain}
+      .dm-formatted table{max-width:100%;display:block;overflow-x:auto}
+      .dm-ledger-list{list-style:none;margin:var(--dm-space-2) 0 var(--dm-space-4);padding:0;display:flex;flex-direction:column;gap:6px;font-size:12px}
+
+      /* ---- states: status line, loading skeleton, notice and error ---- */
+      .dm-statusline{display:flex;align-items:center;gap:6px;margin:0 0 var(--dm-space-2);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+      .dm-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-label-tertiary)}
+      .dm-statusline[data-status="ok"] .dm-dot{background:var(--dsw-alias-state-success-secondary)}
+      .dm-statusline[data-status="offline"] .dm-dot{background:var(--dsw-alias-state-warn-primary)}
+      .dm-statusline[data-status="probing"] .dm-dot{background:var(--dsw-alias-state-business-primary)}
+      .dm-notice-line{margin:0 0 var(--dm-space-2);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+      .dm-loading{display:flex;flex-direction:column;gap:var(--dm-space-2);padding:var(--dm-space-4) 0}
+      .dm-loading-text{margin:0}
+      .dm-skeleton{height:12px;width:min(560px,100%);border-radius:999px;background:var(--dsw-alias-bg-layer-2);animation:dm-pulse 1.6s ease-in-out infinite}
+      .dm-skeleton-short{width:min(320px,60%)}
+      .dm-error{padding:var(--dm-space-3) var(--dm-space-4);border-radius:var(--dm-r-sm);background:var(--dsw-alias-bg-layer-1)}
+      .dm-error p{margin:var(--dm-space-1) 0 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}
+      .dm-empty{padding:clamp(40px,10vh,80px) var(--dm-space-4)}
+      @keyframes dm-pulse{0%,100%{opacity:.55}50%{opacity:1}}
+      @media (prefers-reduced-motion:reduce){.dm-skeleton{animation:none}}
+      @media(max-width:720px){.dm-page{padding:0 var(--dm-space-4)}.dm-header{padding:var(--dm-space-5) 0 var(--dm-space-4)}.dm-card,.dm-message,.dm-turn-box,.dm-memory-bank article{padding:var(--dm-space-3)}.dm-content{padding-bottom:var(--dm-space-5)}}
     `;
 
     return {

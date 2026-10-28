@@ -177,6 +177,28 @@ export function createMemoryApp(options = {}) {
       }
     },
 
+    [`${API_PREFIX}/injections`]: async (req, res) => {
+      if (req.method !== 'GET') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      let limit = 50;
+      try {
+        const raw = typeof req.url === 'string' ? new URL(req.url, 'http://127.0.0.1').searchParams.get('limit') : null;
+        if (raw !== null && raw !== '') {
+          if (!/^[0-9]+$/u.test(raw)) { writeJson(res, 400, { ok: false, error: 'bad-limit' }); return; }
+          limit = Math.min(200, Math.max(1, Number(raw)));
+        }
+      } catch {
+        writeJson(res, 400, { ok: false, error: 'bad-request' });
+        return;
+      }
+      try {
+        const injections = await runtime.listInjections({ limit });
+        writeJson(res, 200, { ok: true, count: injections.length, injections });
+      } catch (error) {
+        fail(res, error);
+      }
+    },
+
     [`${API_PREFIX}/add`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
       if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
