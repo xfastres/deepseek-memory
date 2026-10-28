@@ -422,3 +422,61 @@ test('a natural-language correction hides the memory it clearly names', async ()
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
+
+test('a proposed sentence inherits the entity names the ledger already holds', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-entity-'));
+  const previous = process.env.DSH_MEMORY_DATA_DIR;
+  process.env.DSH_MEMORY_DATA_DIR = dir;
+  try {
+    const ledger = createLedgerService({ root: join(dir, 'ledger') });
+    await ledger.add({
+      content: '项目使用 pnpm',
+      type: 'fact',
+      sourceRefs: [{ session_id: 's1', event_seq: 2, event_type: 'user/message' }],
+      entities: ['pnpm', 'yarn'],
+    });
+
+    const records = [
+      { seq: 1, type: 'turn/start' },
+      { seq: 2, type: 'user/message' },
+      { seq: 3, type: 'turn/end' },
+    ];
+    const sessionQuery = {
+      async listEvents() { return records; },
+      async readEvent({ seq }) {
+        const turn = 1;
+        const text = '记住：项目使用 pnpm 管理依赖';
+        return { target: { seq, data: { turn, message: { content: [{ type: 'text', text }] } } } };
+      },
+    };
+
+    const listeners = [];
+    const ctx = {
+      get: (name) => ({ sessionQuery, webServer: { register() { return () => {}; } }, tools: { register() { return () => {}; } } })[name],
+      effect: (fn) => { fn(); return () => {}; },
+      on: (event, handler) => { listeners.push({ event, handler }); return () => {}; },
+    };
+    apply(ctx);
+    const handler = listeners.find((entry) => entry.event === 'agent/pre-step').handler;
+    await handler.call(ctx, {
+      agent: { id: 's1' },
+      messages: [{ role: 'user', content: '记住：项目使用 pnpm 管理依赖' }],
+      turn: 1,
+      step: 1,
+    }, () => ({ kind: 'enter', messages: [] }));
+
+    const runtime = createRuntimeStore({ root: join(dir, 'runtime') });
+    let candidates = [];
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      candidates = (await runtime.listCandidates()).filter((entry) => entry.text.includes('pnpm'));
+      if (candidates.length > 0) break;
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+    }
+    assert.equal(candidates.length, 1);
+    assert.deepEqual(candidates[0].entities, ['pnpm'], 'only the named entity is inherited, never the unmentioned one');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
+    else process.env.DSH_MEMORY_DATA_DIR = previous;
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});

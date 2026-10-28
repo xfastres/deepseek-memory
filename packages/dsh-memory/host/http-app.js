@@ -390,6 +390,7 @@ export function createMemoryApp(options = {}) {
           reason: body.reason,
           origin: body.origin,
           sourceRef: ref,
+          entities: body.entities,
         });
         writeJson(res, 200, { ok: true, candidate });
       } catch (error) {
@@ -424,10 +425,12 @@ export function createMemoryApp(options = {}) {
             writeJson(res, 422, { ok: false, error: 'invalid-type', candidateType: candidate.type ?? null });
             return;
           }
+          const entities = Array.isArray(candidate.entities) && candidate.entities.length > 0 ? candidate.entities : undefined;
           const result = await service.add({
             content,
             type,
             sourceRefs: candidate.source_refs,
+            ...(entities === undefined ? {} : { entities }),
             idempotencyKey: `candidate:${candidate.id}`,
           });
           const reviewed = await runtime.setCandidateStatus(candidate.id, 'accepted_by_user', { memoryId: result.memory ? result.memory.id : undefined });

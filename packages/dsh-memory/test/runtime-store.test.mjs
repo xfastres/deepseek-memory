@@ -298,3 +298,17 @@ test('a review objection is reported as waiting, a wrong objection is not', asyn
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a candidate keeps the entity names it was given, and only strings', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-cand-entity-'));
+  try {
+    const store = createRuntimeStore({ root: dir });
+    const ref = { session_id: 's1', event_seq: 2, event_type: 'user/message' };
+    const candidate = await store.addCandidate({ text: '项目使用 pnpm', sourceRef: ref, entities: ['pnpm', 7, '', '  '] });
+    assert.deepEqual(candidate.entities, ['pnpm']);
+    const plain = await store.addCandidate({ text: '用户偏好中文', sourceRef: ref });
+    assert.deepEqual(plain.entities, [], 'an absent list is an empty list, not an invention');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

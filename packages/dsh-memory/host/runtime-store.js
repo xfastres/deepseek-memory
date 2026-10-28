@@ -237,6 +237,11 @@ export function createRuntimeStore(options = {}) {
           confidence: typeof input.confidence === 'number' ? input.confidence : 0.6,
           reason: typeof input.reason === 'string' ? input.reason : '',
           origin: CANDIDATE_ORIGINS.includes(input.origin) ? input.origin : null,
+          // Names the ledger already holds and this sentence mentions; the
+          // candidate does not invent structure (§4.2).
+          entities: Array.isArray(input.entities)
+            ? input.entities.filter((entity) => typeof entity === 'string' && entity.trim() !== '').map((entity) => entity.trim()).slice(0, 50)
+            : [],
           created_at: now().toISOString(),
         };
         document.candidates.push(candidate);

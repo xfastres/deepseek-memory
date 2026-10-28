@@ -67,10 +67,14 @@ export function decideAutoMemory({ candidate, memories, settings, reviewPending 
  * and nothing is claimed to have been saved.
  */
 export async function writeAutoAccepted({ service, runtime, candidate }) {
+  // An inherited list is optional: an old candidate has none, and then the
+  // write must look exactly like it did before entities existed.
+  const entities = Array.isArray(candidate.entities) && candidate.entities.length > 0 ? candidate.entities : undefined;
   const result = await service.add({
     content: candidate.text,
     type: candidate.type,
     sourceRefs: candidate.source_refs,
+    ...(entities === undefined ? {} : { entities }),
     idempotencyKey: `auto:${candidate.id}`,
   });
   const memoryId = result !== null && typeof result === 'object' && result.memory !== null && typeof result.memory === 'object'

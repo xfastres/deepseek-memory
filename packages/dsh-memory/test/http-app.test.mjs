@@ -1026,3 +1026,26 @@ test('the add route carries tags and entities, and refuses a malformed list', as
     assert.equal(malformed.json.error, 'invalid');
   });
 });
+
+test('an accepted candidate writes the entities it inherited', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+    const ref = { session_id: 's1', event_seq: 2, event_type: 'user/message' };
+    const created = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '项目使用 pnpm 管理依赖', type: 'fact', sourceRef: ref, entities: ['pnpm'] },
+    });
+    assert.equal(created.status, 200);
+    assert.deepEqual(created.json.candidate.entities, ['pnpm']);
+
+    const accepted = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { candidateId: created.json.candidate.id, action: 'accept' },
+    });
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(accepted.json.memory.entities, ['pnpm'], 'review acceptance carries the structure, not just the sentence');
+
+    const [memory] = (await call(app, '/api/dsh-memory/state')).json.memories;
+    assert.deepEqual(memory.entities, ['pnpm']);
+  });
+});

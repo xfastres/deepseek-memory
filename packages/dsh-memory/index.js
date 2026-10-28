@@ -26,6 +26,7 @@ import {
 import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
 import { loadConfig, resolveConstraints } from './host/constraints.js';
 import { applyCorrection, isCorrectionCandidate } from './host/correction-detect.js';
+import { matchKnownEntities } from './host/entity-match.js';
 import { extractCandidates } from './host/extraction.js';
 import { candidateStatusForPolicy, decideAutoMemory, writeAutoAccepted } from './host/auto-memory.js';
 import { searchMemories } from './host/search.js';
@@ -544,9 +545,11 @@ export function apply(ctx) {
           // The master switch stops extraction itself, not only the writing.
           if (settings.enabled !== true) return;
           const autoAcceptOn = settings.autoAccept === true;
-          const reviewPending = autoAcceptOn ? await app.runtime.reviewPendingIds() : [];
-          return Promise.resolve(autoAcceptOn ? app.service.state() : null).then(async (state) => {
+          // The ledger is read even when auto-accept is off: a candidate may only
+          // inherit entity names the user already confirmed there (§4.2).
+          return Promise.resolve(app.service.state()).then(async (state) => {
             const memories = state !== null && state !== undefined && Array.isArray(state.memories) ? state.memories : [];
+            const reviewPending = autoAcceptOn ? await app.runtime.reviewPendingIds() : [];
             return Promise.all(fresh.map((entry) => Promise.resolve(app.runtime.addCandidate({
               text: entry.text,
               type: entry.type,
@@ -556,6 +559,7 @@ export function apply(ctx) {
               reason: entry.rule,
               origin: 'rule',
               sourceRef: ref,
+              entities: matchKnownEntities(entry.text, memories),
             })).then((candidate) => {
               const decided = decideAutoMemory({ candidate, memories, settings, reviewPending });
               if (decided.policy.decision !== 'AUTO_ACCEPT') {
