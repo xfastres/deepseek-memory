@@ -182,14 +182,22 @@ test('migration imports what it can prove and reports what it cannot', async () 
           { id: 'memory-1', version: 1, status: 'active', content: '有证据的记忆', source: { session_id: 's1', turn: 1 } },
           { id: 'memory-2', version: 1, status: 'active', content: '找不到证据的记忆', source: { session_id: 's1', turn: 9 } },
         ],
-        candidates: [{ id: 'candidate-1' }],
+        candidates: [
+          { id: 'candidate-1', text: '待确认的偏好', source: { session_id: 's1', turn: 1 } },
+          { id: 'candidate-2', text: '没有来源的候选' },
+        ],
       },
     });
     assert.equal(migrated.status, 200);
     assert.equal(migrated.json.applied, 1);
     assert.equal(migrated.json.failed, 0);
     assert.ok(migrated.json.skipped.some((entry) => entry.reason === 'no-evidence'));
-    assert.equal(migrated.json.deferred.candidates, 1);
+    assert.equal(migrated.json.deferred.candidates.imported, 1);
+    assert.equal(migrated.json.deferred.candidates.skipped[0].reason, 'no-evidence');
+
+    const queued = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(queued.json.candidates.length, 1);
+    assert.equal(queued.json.candidates[0].text, '待确认的偏好');
 
     const state = await call(app, '/api/dsh-memory/state');
     assert.equal(state.json.memories.length, 1);
@@ -204,6 +212,88 @@ test('migration imports what it can prove and reports what it cannot', async () 
     assert.equal(again.json.replayed, 0);
     assert.equal(again.json.applied, 0);
     assert.ok(again.json.skipped.some((entry) => entry.reason === 'duplicate'));
+  });
+});
+
+test('a candidate is queued, then accepted into the ledger with its own evidence', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+
+    const queued = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST',
+      headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '用户偏好中文回答', type: 'preference', sessionId: 's1', turn: 1 },
+    });
+    assert.equal(queued.status, 200);
+    assert.equal(queued.json.candidate.status, 'pending');
+    assert.equal(queued.json.candidate.source_refs[0].event_seq, 2);
+
+    const list = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(list.json.candidates.length, 1);
+    assert.equal(list.json.summary.pending, 1);
+
+    const accepted = await call(app, '/api/dsh-memory/review', {
+      method: 'POST',
+      headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { candidateId: queued.json.candidate.id, action: 'accept' },
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.json.status, 'committed');
+    assert.equal(accepted.json.memory.content, '用户偏好中文回答');
+    assert.equal(accepted.json.candidate.status, 'accepted');
+
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 1);
+    assert.equal(state.json.memories[0].source.event_seq, 2);
+  });
+});
+
+test('review refuses what it cannot do instead of guessing', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+
+    const noEvidence = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: { text: '没有证据' },
+    });
+    assert.equal(noEvidence.status, 422);
+
+    const withRef = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '有证据', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    assert.equal(withRef.status, 200);
+
+    const duplicate = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '有证据 ', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    assert.equal(duplicate.status, 409);
+    assert.equal(duplicate.json.error, 'duplicate');
+
+    const missing = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: { candidateId: 'C-nope', action: 'accept' },
+    });
+    assert.equal(missing.status, 404);
+
+    const unknownAction = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { candidateId: withRef.json.candidate.id, action: 'maybe' },
+    });
+    assert.equal(unknownAction.status, 400);
+    assert.equal(unknownAction.json.error, 'unknown-action');
+
+    const rejected = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { candidateId: withRef.json.candidate.id, action: 'reject' },
+    });
+    assert.equal(rejected.json.candidate.status, 'rejected');
+    assert.equal((await call(app, '/api/dsh-memory/state')).json.memories.length, 0);
   });
 });
 
