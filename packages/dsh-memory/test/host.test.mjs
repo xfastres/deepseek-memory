@@ -37,12 +37,31 @@ async function callPing(request) {
   return { status: res.captured.status, json: JSON.parse(res.captured.body) };
 }
 
-test('the Host half exposes exactly one exact ping route', () => {
-  const routes = createRoutes();
-  assert.equal(routes.length, 1);
+test('the Host half exposes the ping probe plus the memory routes', () => {
+  const routes = createRoutes({ dataDir: 'C:/tmp/never-touched', lookup: () => undefined });
   assert.equal(routes[0].kind, 'exact');
   assert.equal(routes[0].path, PING_PATH);
   assert.equal(typeof routes[0].handler, 'function');
+  const paths = routes.map((route) => route.path);
+  assert.deepEqual(paths, [
+    PING_PATH,
+    '/api/dsh-memory/state',
+    '/api/dsh-memory/export',
+    '/api/dsh-memory/add',
+    '/api/dsh-memory/update',
+    '/api/dsh-memory/retract',
+  ]);
+  assert.equal(new Set(paths).size, paths.length, 'route paths must be distinct');
+  for (const route of routes) {
+    assert.equal(route.kind, 'exact');
+    assert.equal(typeof route.handler, 'function');
+  }
+});
+
+test('building the route list touches no disk', () => {
+  // A directory that does not exist stands in for a broken data path: only a
+  // request may open it, never plugin activation.
+  assert.doesNotThrow(() => createRoutes({ dataDir: 'C:/definitely/not/here', lookup: () => undefined }));
 });
 
 test('a loopback request with a loopback Host header gets a JSON answer', async () => {
@@ -126,7 +145,8 @@ test('apply registers both the route and the tool when services exist', () => {
     effect: (fn) => { fn(); return () => {}; },
   };
   apply({ inject: (_deps, callback) => callback(scoped) });
-  assert.equal(registered.length, 1);
+  assert.equal(registered.length, 6);
+  assert.equal(registered[0].path, PING_PATH);
   assert.equal(tooled.length, 1);
   assert.equal(tooled[0].name, 'dsh_memory_ping');
 });
@@ -142,6 +162,6 @@ test('apply never throws and registers the route once a web server exists', () =
 
   const scoped = { get: (name) => (name === 'webServer' ? webServer : undefined), effect: (fn) => { fn(); return () => {}; } };
   apply({ inject: (_deps, callback) => callback(scoped) });
-  assert.equal(registered.length, 1);
+  assert.equal(registered.length, 6);
   assert.equal(registered[0].path, PING_PATH);
 });

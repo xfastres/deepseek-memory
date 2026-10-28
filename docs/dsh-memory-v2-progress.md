@@ -101,6 +101,43 @@ Host 半边还注册了 `dsh_memory_ping` 工具。重启后我可以用 `cordis
 - 证据解析 13（约 0.12 秒）
 - **合计 50 项全部通过**
 
+## 阶段 2.4b 路由接线（Q3 已解决）
+
+**Q3 有答案了，而且不是猜的**：`webServer` 服务契约里 `WebRoute` 的类型声明是
+
+```ts
+interface WebRoute {
+  kind: 'exact' | 'prefix';
+  path: string;
+  handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
+}
+```
+
+与我们一直在用的形状完全一致，handler 也允许返回 Promise。所以路由形状不需要等重启就能确认。
+
+新增 `packages/dsh-memory/host/http-app.js`，提供 5 条真实路由：
+
+| 路由 | 方法 | 作用 |
+|---|---|---|
+| `/api/dsh-memory/state` | GET | 读全部记忆与账本头 |
+| `/api/dsh-memory/export` | GET | 导出 `dsh-memory/v2` |
+| `/api/dsh-memory/add` | POST | 新增；带 `sessionId + turn` 时用证据解析换真 event_seq |
+| `/api/dsh-memory/update` | POST | 编辑；基线 change id 不符返回 409 |
+| `/api/dsh-memory/retract` | POST | 撤回 |
+
+安全分层：读接口只需回环 + 同 Host；**写接口额外要求浏览器同源标记**，裸 curl 写不进去。
+
+关键顺序：**路由先存在、页面暂不调用**。页面仍用本地存储，所以即使路由有问题，用户看到的也只是一个未被使用的 404，而不是丢失的记忆。
+
+7 项测试覆盖：未授权拒绝、缺浏览器标记拒绝、缺证据 422、真证据写入、`turn → event_seq` 全链路、409 / 404、非法 JSON / 错误方法 / 撤回。
+
+### 累计测试
+
+- 快套件（客户端 15 + Host 12 + 真实 HTTP 4 + 证据 13）= 44，约 0.23 秒
+- HTTP 应用 7，约 7.6 秒
+- 账本服务 8，约 13 秒
+- **合计 59 项全部通过**
+
 ## 下一步
 
-仍是重启验证通道。之后：2.4b 接路由，2.5 迁移（现在证据解析已经就绪）。
+重启验证：`/api/dsh-memory/state` 是否真的被挂载、页面 fetch 能否过认证。之后 2.4c 把界面切到 Host，2.5 迁移。

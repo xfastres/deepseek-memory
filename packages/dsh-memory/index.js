@@ -1,22 +1,50 @@
 /**
  * Host half of the memory bundle.
  *
- * Phase 2.1 is a deliberate minimal experiment: one read-only route that proves
- * the page can reach this Host half over the DSH web server. It deliberately
- * owns no memory data yet — the Git ledger arrives in phase 2.4, after this
- * channel and its failure modes are verified.
- *
  * Two hard rules shape this file:
  *
  * 1. Nothing here may block Web boot. Every step is guarded, and a failure
  *    leaves the plugin loaded but route-less instead of failing activation.
- * 2. The route is reachable only from a loopback socket with a loopback Host
- *    header and no cross-site browser provenance. That is the same fence the
- *    installed task-board plugin uses for its own local API.
+ * 2. Routes are reachable only from a loopback socket with a loopback Host
+ *    header; mutations additionally need a browser same-origin marker.
+ *
+ * The route shape is not a guess: `webServer.register` takes
+ * `{ kind: 'exact' | 'prefix', path, handler(req, res) }`.
  */
 
-export const ROUTE_PREFIX = '/api/dsh-memory';
-export const PING_PATH = `${ROUTE_PREFIX}/ping`;
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+  API_PREFIX,
+  createAppRoutes,
+  createMemoryApp,
+  isTrustedRead,
+  isTrustedWrite,
+  writeJson,
+} from './host/http-app.js';
+
+export { API_PREFIX, isTrustedWrite, writeJson };
+
+export const ROUTE_PREFIX = API_PREFIX;
+export const PING_PATH = `${API_PREFIX}/ping`;
+
+/** Routes served by the memory application, in addition to the ping probe. */
+export const APP_ROUTE_NAMES = Object.freeze(['state', 'export', 'add', 'update', 'retract']);
+
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+export function isLoopbackAddress(value) {
+  return typeof value === 'string' && LOOPBACK_ADDRESSES.has(value);
+}
+
+export function isLoopbackHostname(value) {
+  return typeof value === 'string' && LOOPBACK_HOSTNAMES.has(value.toLowerCase());
+}
+
+/** The read fence, shared with the memory application. */
+export const isTrustedRequest = isTrustedRead;
 
 /**
  * Runtime capability probe. The index design depends on two facts that cannot
@@ -70,56 +98,6 @@ export async function probeRuntime() {
   };
 }
 
-const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
-
-export function isLoopbackAddress(value) {
-  return typeof value === 'string' && LOOPBACK_ADDRESSES.has(value);
-}
-
-export function isLoopbackHostname(value) {
-  return typeof value === 'string' && LOOPBACK_HOSTNAMES.has(value.toLowerCase());
-}
-
-/**
- * Authoritative request fence: the socket address plus the Host header decide,
- * and X-Forwarded-For is never consulted. A cross-site browser request is
- * always refused; when the browser sends an Origin, it must equal the Host.
- */
-export function isTrustedRequest(req) {
-  if (!req || typeof req !== 'object') return false;
-  const socket = req.socket;
-  if (!socket || !isLoopbackAddress(socket.remoteAddress)) return false;
-  const hostHeader = req.headers ? req.headers.host : undefined;
-  if (typeof hostHeader !== 'string') return false;
-  let authority;
-  try {
-    authority = new URL(`http://${hostHeader}`);
-  } catch {
-    return false;
-  }
-  if (!isLoopbackHostname(authority.hostname)) return false;
-  const headers = req.headers || {};
-  if (headers['sec-fetch-site'] === 'cross-site') return false;
-  const origin = headers.origin;
-  if (typeof origin !== 'string') return true;
-  try {
-    return new URL(origin).host === authority.host;
-  } catch {
-    return false;
-  }
-}
-
-export function writeJson(res, status, body) {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(payload),
-    'cache-control': 'no-store',
-  });
-  res.end(payload);
-}
-
 /** Read-only liveness probe plus the cached runtime capability answer. */
 export function createPingHandler() {
   return async (req, res) => {
@@ -135,7 +113,7 @@ export function createPingHandler() {
       writeJson(res, 200, {
         ok: true,
         plugin: '@local/dsh-memory',
-        phase: '2.2',
+        phase: '2.4',
         time: new Date().toISOString(),
         pid: process.pid,
         runtime: await probeRuntime(),
@@ -148,10 +126,6 @@ export function createPingHandler() {
       }
     }
   };
-}
-
-export function createRoutes() {
-  return [{ kind: 'exact', path: PING_PATH, handler: createPingHandler() }];
 }
 
 /**
@@ -184,12 +158,51 @@ export function createPingTool() {
       return {
         ok: true,
         plugin: '@local/dsh-memory',
-        phase: '2.2',
+        phase: '2.4',
         time: new Date().toISOString(),
         runtime: await probeRuntime(),
       };
     },
   };
+}
+
+/** The plugin data directory. Overridable for tests and manual experiments. */
+export function resolveDataDir(env = process.env) {
+  const override = env && typeof env.DSH_MEMORY_DATA_DIR === 'string' ? env.DSH_MEMORY_DATA_DIR.trim() : '';
+  if (override !== '') return override;
+  return join(homedir(), '.dsh', 'dsh-memory');
+}
+
+/**
+ * Build the route list. The memory application is created lazily on the first
+ * request, so plugin activation touches no disk and cannot fail on a bad path.
+ */
+export function createRoutes({ dataDir = resolveDataDir(), lookup = () => undefined } = {}) {
+  const routes = [{ kind: 'exact', path: PING_PATH, handler: createPingHandler() }];
+  let app;
+  const getApp = () => {
+    if (app === undefined) app = createMemoryApp({ dataDir, sessionQuery: lookup('sessionQuery') });
+    return app;
+  };
+  for (const name of APP_ROUTE_NAMES) {
+    const path = `${API_PREFIX}/${name}`;
+    routes.push({
+      kind: 'exact',
+      path,
+      handler: async (req, res) => {
+        try {
+          await getApp().routes[path](req, res);
+        } catch {
+          try {
+            writeJson(res, 500, { ok: false, error: 'internal' });
+          } catch {
+            // The socket is already gone.
+          }
+        }
+      },
+    });
+  }
+  return routes;
 }
 
 function keep(ctx, dispose) {
@@ -202,7 +215,8 @@ function registerRoutes(ctx) {
     if (!ctx) return;
     const webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : undefined;
     if (!webServer || typeof webServer.register !== 'function') return;
-    for (const route of createRoutes()) keep(ctx, webServer.register(route));
+    const lookup = (name) => (typeof ctx.get === 'function' ? ctx.get(name) : undefined);
+    for (const route of createRoutes({ lookup })) keep(ctx, webServer.register(route));
   } catch {
     // A Host-half failure must never take the Harness down with it.
   }
