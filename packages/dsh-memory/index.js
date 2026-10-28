@@ -161,7 +161,7 @@ export function createPingTool(options = {}) {
           phase: { type: 'string' },
           time: { type: 'string' },
           runtime: { type: 'object' },
-          injection: { type: ['object', 'null'] },
+          injection: { type: 'object' },
         },
         required: ['ok'],
         additionalProperties: true,
@@ -274,94 +274,111 @@ function injectionSnapshot(injection) {
 }
 
 export function apply(ctx) {
-  try {
-    const lookup = (name) => service(ctx, name);
-    let app;
-    const getApp = () => {
-      if (app === undefined) app = createMemoryApp({ dataDir: resolveDataDir(), sessionQuery: lookup('sessionQuery') });
-      return app;
-    };
-
-    // Injection is built first so the routes can refresh it after a write.
-    const injection = createInjectionRuntime({ service: { state: () => getApp().service.state() } });
-    /**
-     * What the rule engine would propose for the current turn. Nothing is
-     * written: this is the evidence needed to tune precision before any
-     * automatic memory is created from a sentence.
-     */
-    let proposed = [];
-    const status = () => ({
-      ...injectionSnapshot(injection),
-      candidates: proposed.length,
-      candidate_sample: proposed.slice(0, 2).map((entry) => ({ type: entry.type, rule: entry.rule, confidence: entry.confidence, text: entry.text.slice(0, 60) })),
-    });
-    const refresh = () => {
-      injection.refresh().catch(() => {});
-    };
-
-    const webServer = service(ctx, 'webServer');
-    if (webServer && typeof webServer.register === 'function') {
-      for (const route of createRoutes({ lookup, getApp, status })) {
-        const handler = route.handler;
-        keep(ctx, webServer.register({
-          ...route,
-          handler: async (req, res) => {
-            await handler(req, res);
-            if (req.method !== 'GET') refresh();
-          },
-        }));
+  /**
+   * Each registration is attempted on its own.
+   *
+   * This is not defensive style: a single invalid definition used to kill every
+   * registration after it, because one try block covered them all. The routes
+   * kept working while the tool and the step observer silently disappeared, and
+   * nothing reported it.
+   */
+  const attempt = (step) => {
+    try {
+      step();
+    } catch (error) {
+      // One broken registration must not disable the others, and it must be
+      // visible: a silently missing tool looks exactly like a plugin that never
+      // loaded.
+      try {
+        const name = step && step.name ? step.name : 'anonymous';
+        console.warn(`[dsh-memory] registration failed (${name}): ${error && error.message ? error.message : String(error)}`);
+      } catch {
+        // Logging must not become the failure.
       }
     }
-    const tools = service(ctx, 'tools');
-    if (tools && typeof tools.register === 'function') {
-      keep(ctx, tools.register(createPingTool({ status })));
-    }
+  };
 
-    const systemPrompt = service(ctx, 'systemPrompt');
-    let contextOff = null;
-    /**
-     * Register the prompt context only once the ledger actually holds something.
-     *
-     * Registration is cheap but prompt assembly is on the critical path of every
-     * step, so an empty store keeps this plugin out of assembly entirely.
-     */
-    const ensureContext = () => {
-      if (contextOff !== null || !systemPrompt || typeof systemPrompt.context !== 'function') return;
-      const eligible = injection.snapshot.memories.some((memory) => memory && memory.status === 'active');
-      if (!eligible) return;
-      const provider = (context) => {
-        try {
-          return injection.buildText(context && context.scope).text;
-        } catch {
-          return '';
-        }
-      };
-      contextOff = systemPrompt.context({ name: CONTEXT_NAME, order: 100, text: provider });
-      if (typeof contextOff !== 'function') contextOff = () => {};
-      keep(ctx, contextOff);
+  const lookup = (name) => service(ctx, name);
+  let app;
+  const getApp = () => {
+    if (app === undefined) app = createMemoryApp({ dataDir: resolveDataDir(), sessionQuery: lookup('sessionQuery') });
+    return app;
+  };
+
+  const injection = createInjectionRuntime({ service: { state: () => getApp().service.state() } });
+  /** What the rule engine proposes for the current turn. Nothing is written. */
+  let proposed = [];
+  const status = () => ({
+    ...injectionSnapshot(injection),
+    candidates: proposed.length,
+    candidate_sample: proposed.slice(0, 2).map((entry) => ({ type: entry.type, rule: entry.rule, confidence: entry.confidence, text: entry.text.slice(0, 60) })),
+  });
+  const refresh = () => {
+    injection.refresh().catch(() => {});
+  };
+
+  const systemPrompt = service(ctx, 'systemPrompt');
+  let contextOff = null;
+  /**
+   * Register the prompt context only once the ledger holds an active memory.
+   * Prompt assembly is on the critical path of every step, so an empty store
+   * keeps this plugin out of it entirely.
+   */
+  const ensureContext = () => {
+    if (contextOff !== null || !systemPrompt || typeof systemPrompt.context !== 'function') return;
+    const eligible = injection.snapshot.memories.some((memory) => memory && memory.status === 'active');
+    if (!eligible) return;
+    const provider = (context) => {
+      try {
+        return injection.buildText(context && context.scope).text;
+      } catch {
+        return '';
+      }
     };
+    contextOff = systemPrompt.context({ name: CONTEXT_NAME, order: 100, text: provider });
+    if (typeof contextOff !== 'function') contextOff = () => {};
+    keep(ctx, contextOff);
+  };
 
-    // Observe the text entering each step and keep the snapshot fresh. The
-    // refresh happens here, never in the prompt provider, because this is the
-    // only place where waiting for the ledger is acceptable.
-    if (typeof ctx.on === 'function') {
-      const onPreStep = function onPreStep(payload, next) {
-        const observed = injection.observe(this === undefined ? ctx : this, payload);
-        try {
-          proposed = observed === null ? [] : extractCandidates(observed.text);
-        } catch {
-          proposed = [];
-        }
-        return Promise.resolve(injection.ensureFresh())
-          .then(() => ensureContext())
-          .catch(() => {})
-          .then(() => next());
-      };
-      const off = ctx.on('agent/pre-step', onPreStep);
-      if (typeof off === 'function') keep(ctx, off);
-      else if (off && typeof off.dispose === 'function') keep(ctx, () => off.dispose());
+  attempt(() => {
+    const webServer = service(ctx, 'webServer');
+    if (!webServer || typeof webServer.register !== 'function') return;
+    for (const route of createRoutes({ lookup, getApp, status })) {
+      const handler = route.handler;
+      keep(ctx, webServer.register({
+        ...route,
+        handler: async (req, res) => {
+          await handler(req, res);
+          if (req.method !== 'GET') refresh();
+        },
+      }));
     }
-  } catch {
-    // A Host-half failure must never take the Harness down with it.
-  }
+  });
+
+  attempt(() => {
+    const tools = service(ctx, 'tools');
+    if (tools && typeof tools.register === 'function') keep(ctx, tools.register(createPingTool({ status })));
+  });
+
+  // Observe the text entering each step and keep the snapshot fresh. The
+  // refresh happens here, never in the prompt provider, because this is the
+  // only place where waiting for the ledger is acceptable.
+  attempt(() => {
+    if (typeof ctx.on !== 'function') return;
+    const onPreStep = function onPreStep(payload, next) {
+      const observed = injection.observe(this === undefined ? ctx : this, payload);
+      try {
+        proposed = observed === null ? [] : extractCandidates(observed.text);
+      } catch {
+        proposed = [];
+      }
+      return Promise.resolve(injection.ensureFresh())
+        .then(() => ensureContext())
+        .catch(() => {})
+        .then(() => next());
+    };
+    const off = ctx.on('agent/pre-step', onPreStep);
+    if (typeof off === 'function') keep(ctx, off);
+    else if (off && typeof off.dispose === 'function') keep(ctx, () => off.dispose());
+  });
 }

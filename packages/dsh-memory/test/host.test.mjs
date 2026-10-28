@@ -180,6 +180,26 @@ test('apply never throws and registers the route once a web server exists', () =
   assert.equal(registered[0].path, PING_PATH);
 });
 
+test('one broken registration does not disable the others', () => {
+  const listeners = [];
+  const systemPrompt = { context() { return () => {}; } };
+  const ctx = {
+    get: (name) => ({
+      tools: { register() { throw new Error('invalid definition'); } },
+      systemPrompt,
+    })[name],
+    effect: (fn) => { fn(); return () => {}; },
+    on: (event, handler) => { listeners.push({ event, handler }); return () => {}; },
+  };
+  apply(ctx);
+  assert.equal(listeners.length, 1, 'the step observer still registers when the tool is refused');
+});
+
+test('the ping tool schema stays inside the documented schema node shape', () => {
+  const tool = createPingTool();
+  assert.equal(typeof tool.output.schema.properties.injection.type, 'string', 'type must be one name, never an array');
+});
+
 test('apply keeps an empty ledger entirely out of prompt assembly', () => {
   const contexts = [];
   const systemPrompt = { context(entry) { contexts.push(entry); return () => {}; } };
