@@ -41,6 +41,7 @@ window.__ModuleLoader__.load({
       ledgerTitle: '记忆库内容（{count} 条）',
       ledgerActive: '已生效',
       ledgerInactive: '已撤回',
+      candidateEmpty: '候选内容不能为空。',
       search: '搜索记忆…', filterType: '类型', filterStatus: '状态', filterAll: '全部',
       filterEmpty: '没有匹配这些筛选条件的记忆。', searchClear: '清除搜索',
       traceTitle: '注入追踪（{count}）', traceHint: '只读审计 · 不包含记忆正文 · 展开时才读取',
@@ -87,6 +88,7 @@ window.__ModuleLoader__.load({
       ledgerTitle: 'Memory store contents ({count})',
       ledgerActive: 'active',
       ledgerInactive: 'retracted',
+      candidateEmpty: 'The candidate text is empty.',
       search: 'Search memories…', filterType: 'Type', filterStatus: 'Status', filterAll: 'All',
       filterEmpty: 'No memories match these filters.', searchClear: 'Clear search',
       traceTitle: 'Injection trace ({count})', traceHint: 'Read-only audit · no memory bodies · loaded on expand',
@@ -641,6 +643,16 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** Which message a failed candidate save deserves. */
+    function candidateErrorKey(thrown) {
+      return thrown && thrown.message === 'empty' ? 'candidateEmpty' : 'onlyCompleted';
+    }
+
+    /** Blank candidates cannot be saved, so the submit action is disabled early. */
+    function candidateSubmitDisabled(text) {
+      return String(text ?? '').trim() === '';
+    }
+
     function saveCandidate(turn, text) {
       if (turn.status !== 'completed') throw new Error('incomplete');
       const trimmed = text.trim();
@@ -705,8 +717,8 @@ window.__ModuleLoader__.load({
             onSaved(saveCandidate(turn, text));
             setText('');
             setOpen(false);
-          } catch {
-            setError(t('onlyCompleted'));
+          } catch (thrown) {
+            setError(t(candidateErrorKey(thrown)));
           }
         },
       },
@@ -717,7 +729,7 @@ window.__ModuleLoader__.load({
           onChange: (event) => setText(event.target.value),
         }),
         h('div', null,
-          h('button', { type: 'submit', className: 'dm-refresh' }, t('save')),
+          h('button', { type: 'submit', className: 'dm-refresh', disabled: candidateSubmitDisabled(text) }, t('save')),
           h('button', { type: 'button', className: 'dm-back', onClick: () => setOpen(false) }, t('cancel'))),
         error ? h('p', { className: 'dm-muted', role: 'alert' }, error) : null);
     }
@@ -1121,7 +1133,17 @@ window.__ModuleLoader__.load({
         const failed = (status) => setPing(t('pingFailed').replace('{status}', String(status)));
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 5000);
-        fetch(`${HOST_PREFIX}/ping`, { headers: { accept: 'application/json' }, signal: controller.signal })
+        let request;
+        try {
+          request = fetch(`${HOST_PREFIX}/ping`, { headers: { accept: 'application/json' }, signal: controller.signal });
+        } catch {
+          // A synchronous throw must not leave the button disabled forever.
+          clearTimeout(timer);
+          setPingPending(false);
+          setPing(t('pingFailed').replace('{status}', 'network'));
+          return;
+        }
+        request
           .then((response) => {
             if (response.status === 404) { setPing(t('pingMissing')); return undefined; }
             if (response.status === 403) { setPing(t('pingForbidden')); return undefined; }
@@ -1581,6 +1603,8 @@ window.__ModuleLoader__.load({
       injectionRows,
       injectionView,
       loadInjections,
+      candidateErrorKey,
+      candidateSubmitDisabled,
       migrationSummary,
       mergeDraft,
       editMemory,

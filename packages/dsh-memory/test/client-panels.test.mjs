@@ -180,3 +180,16 @@ test('a failed audit read stays retryable instead of throwing', async () => {
     assert.ok(Array.isArray(result.records));
   }
 });
+
+test('a blank candidate is blocked early and gets its own message', async () => {
+  const { plugin, t } = await load();
+  assert.equal(plugin.candidateSubmitDisabled(''), true);
+  assert.equal(plugin.candidateSubmitDisabled('   '), true);
+  assert.equal(plugin.candidateSubmitDisabled(undefined), true);
+  assert.equal(plugin.candidateSubmitDisabled('这一轮要记下的内容'), false);
+
+  assert.equal(plugin.candidateErrorKey({ message: 'empty' }), 'candidateEmpty');
+  assert.equal(t(plugin.candidateErrorKey({ message: 'empty' })), '候选内容不能为空。');
+  assert.equal(plugin.candidateErrorKey({ message: 'incomplete' }), 'onlyCompleted');
+  assert.equal(plugin.candidateErrorKey(null), 'onlyCompleted');
+});
