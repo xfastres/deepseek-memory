@@ -17,7 +17,7 @@ window.__ModuleLoader__.load({
       tools: '工具调用（{count}）', noContent: '这条消息没有可显示的文本。',
       remember: '记下这一轮', candidateLabel: '这一轮的候选记忆', save: '保存候选',
       cancel: '取消', saved: '已保存为候选', onlyCompleted: '只有已完成轮次可以记下。',
-      candidates: '候选记忆（{count}）', localCandidates: '仅保存在这台浏览器，尚未成为正式记忆。',
+      candidates: '候选记忆（{count}）', localCandidates: '本地存储 · 未进 Git 账本；Host 在线时可用上方「导入到记忆库」送入运行时队列。',
       compare: '比较', accept: '接受', reject: '拒绝', accepted: '已接受',
       mergeInto: '合并到', newMemory: '自动判断',
       exportJson: '导出', importJson: '导入',
@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
       pingTimeout: '连接 Host 超时，Host 可能无响应。',
       hostProbing: '记忆库：连接中…', hostConnected: '记忆库：已连接 · {count} 条 · 提交 {head}',
       hostOffline: '记忆库：未连接（本地模式）· {reason}',
-      migrateButton: '导入到记忆库（{count} 条）',
+      migrateButton: '导入到记忆库（{count} 项）',
       migrateSending: '正在导入记忆库…',
       migrateSummary: '导入完成：新增 {applied} 条，重复 {replayed} 条，失败 {failed} 条，跳过 {skipped} 条（{detail}）',
       migrateNoSkips: '无',
@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
       tools: 'Tool activity ({count})', noContent: 'This message has no displayable text.',
       remember: 'Remember this turn', candidateLabel: 'Candidate from this turn', save: 'Save candidate',
       cancel: 'Cancel', saved: 'Saved as a candidate', onlyCompleted: 'Only a completed turn can be remembered.',
-      candidates: 'Candidates ({count})', localCandidates: 'Stored only in this browser; not formal memory yet.',
+      candidates: 'Candidates ({count})', localCandidates: 'Local storage · not in the Git ledger; with the Host online, use "Import into the memory store" above to move it into the runtime queue.',
       compare: 'Compare', accept: 'Accept', reject: 'Reject', accepted: 'Accepted',
       mergeInto: 'Merge into', newMemory: 'Automatic',
       exportJson: 'Export', importJson: 'Import',
@@ -92,7 +92,7 @@ window.__ModuleLoader__.load({
       pingTimeout: 'The Host did not answer in time.',
       hostProbing: 'Memory store: connecting…', hostConnected: 'Memory store: connected · {count} entries · commit {head}',
       hostOffline: 'Memory store: not connected (local mode) · {reason}',
-      migrateButton: 'Import into the memory store ({count})',
+      migrateButton: 'Import into the memory store ({count} items)',
       migrateSending: 'Importing into the memory store…',
       migrateSummary: 'Import finished: {applied} added, {replayed} already present, {failed} failed, {skipped} skipped ({detail})',
       migrateNoSkips: 'none',
@@ -1419,6 +1419,8 @@ window.__ModuleLoader__.load({
       const shownMemories = filterMemories(activeMemories, { query, type: typeFilter });
       const shownLedger = ledgerView(filterMemories(ledger, { query, type: typeFilter }), 20);
       const filtersActive = query.trim() !== '' || typeFilter !== '';
+      const pendingCandidateCount = candidates.filter((candidate) => candidate.status === 'candidate').length;
+      const migratable = memories.length + pendingCandidateCount;
       const toolbar = activeMemories.length > 0 || ledger.length > 0
         ? h('div', { className: 'dm-toolbar' },
           h('label', { className: 'dm-field' },
@@ -1616,8 +1618,8 @@ window.__ModuleLoader__.load({
           h('p', { className: 'dm-statusline', role: 'status', 'data-status': host.status },
             h('span', { className: 'dm-dot', 'aria-hidden': true }),
             h('span', null, hostLine(host, t))),
-          host.status === 'ok' && memories.length > 0
-            ? h('button', { type: 'button', className: 'dm-refresh', disabled: migrating, onClick: migrateToHost }, t('migrateButton').replace('{count}', String(memories.length)))
+          host.status === 'ok' && migratable > 0
+            ? h('button', { type: 'button', className: 'dm-refresh', disabled: migrating, onClick: migrateToHost }, t('migrateButton').replace('{count}', String(migratable)))
             : null,
           host.status === 'ok' && hostQueue.status === 'error'
             ? h('p', { className: 'dm-muted', role: 'alert' }, t('hostCandidatesError'))

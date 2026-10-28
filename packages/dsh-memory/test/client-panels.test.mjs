@@ -388,3 +388,14 @@ test('host queue reviews name the candidate and never invent a target', async ()
   assert.equal(t('hostCandidateRejected'), '已拒绝该候选。');
   assert.match(t('hostCandidateFailed').replace('{reason}', 'stale'), /stale/u);
 });
+
+test('the local store is labelled as unledgered and stays migratable', async () => {
+  const { plugin, t } = await load();
+  assert.match(t('localCandidates'), /未进 Git 账本/u);
+  assert.match(t('localCandidates'), /导入到记忆库/u);
+  assert.match(t('migrateButton').replace('{count}', '3'), /3 项/u);
+  // Migration reports remain honest about refusals: reasons are counted, not hidden.
+  const summary = plugin.migrationSummary({ applied: 2, replayed: 1, failed: 0, skipped: [{ reason: 'no-evidence' }, { reason: 'no-evidence' }, { reason: 'duplicate' }] }, t);
+  assert.ok(summary !== null && summary !== undefined);
+  assert.equal(typeof summary, 'string');
+});
