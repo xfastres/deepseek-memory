@@ -41,6 +41,16 @@ window.__ModuleLoader__.load({
       ledgerTitle: '记忆库内容（{count} 条）',
       ledgerActive: '已生效',
       ledgerInactive: '已撤回',
+      search: '搜索记忆…', filterType: '类型', filterStatus: '状态', filterAll: '全部',
+      filterEmpty: '没有匹配这些筛选条件的记忆。', searchClear: '清除搜索',
+      traceTitle: '注入追踪（{count}）', traceHint: '只读审计 · 不包含记忆正文 · 展开时才读取',
+      traceEmpty: '还没有注入记录。', traceError: '无法读取注入记录。', traceLoading: '正在读取注入记录…',
+      traceStateReturned: '宿主已返回注入文本', traceConfirmed: '已确认模型使用',
+      traceUnconfirmed: '尚未确认模型是否使用', notProvided: '该记录未提供',
+      traceTurn: '轮次', traceChars: '字符', traceCalls: '调用',
+      traceSnapshot: '审计快照', traceReasons: '选择原因', tracePools: '预算',
+      traceMemories: '入选记忆', traceExcluded: '排除', traceConstraint: '约束', traceDynamic: '动态',
+      kindConstraint: '约束记忆', kindDynamic: '动态记忆',
     };
     const en = {
       panel: 'Memory', title: 'Working memory', intro: "Today's interactions with your AI, with original text and sources.",
@@ -77,6 +87,16 @@ window.__ModuleLoader__.load({
       ledgerTitle: 'Memory store contents ({count})',
       ledgerActive: 'active',
       ledgerInactive: 'retracted',
+      search: 'Search memories…', filterType: 'Type', filterStatus: 'Status', filterAll: 'All',
+      filterEmpty: 'No memories match these filters.', searchClear: 'Clear search',
+      traceTitle: 'Injection trace ({count})', traceHint: 'Read-only audit · no memory bodies · loaded on expand',
+      traceEmpty: 'No injection records yet.', traceError: 'Could not read injection records.', traceLoading: 'Reading injection records…',
+      traceStateReturned: 'Host returned injected text', traceConfirmed: 'Model use confirmed',
+      traceUnconfirmed: 'Model use not confirmed yet', notProvided: 'Not provided by this record',
+      traceTurn: 'Turn', traceChars: 'chars', traceCalls: 'calls',
+      traceSnapshot: 'Snapshot head', traceReasons: 'Why chosen', tracePools: 'Budget',
+      traceMemories: 'Chosen', traceExcluded: 'Excluded', traceConstraint: 'Constraint', traceDynamic: 'Dynamic',
+      kindConstraint: 'Constraint memory', kindDynamic: 'Dynamic memory',
     };
 
     const CANDIDATES_KEY = 'dsh-memory.candidates.v1';
@@ -857,6 +877,105 @@ window.__ModuleLoader__.load({
           text: memory && typeof memory.content === 'string' ? memory.content : '',
           active: status === 'active',
           status,
+          // Only forwarded when the ledger actually stored it; never invented.
+          type: memory && typeof memory.type === 'string' ? memory.type : null,
+          scope: memory && typeof memory.scope === 'string' ? memory.scope : null,
+        };
+      });
+    }
+
+    /** Case-insensitive text match across the fields the UI actually has. */
+    function includesQuery(value, query) {
+      return String(value ?? '').toLocaleLowerCase().includes(query);
+    }
+
+    /** Filter local or ledger memories by query, type and status. Absent fields never match a filter. */
+    function filterMemories(memories, options = {}) {
+      const list = Array.isArray(memories) ? memories : [];
+      const query = String(options.query ?? '').trim().toLocaleLowerCase();
+      const type = String(options.type ?? '');
+      const status = String(options.status ?? '');
+      return list.filter((memory) => {
+        if (!memory || typeof memory !== 'object') return false;
+        if (type !== '' && memory.type !== type) return false;
+        if (status !== '' && memory.status !== status) return false;
+        if (query === '') return true;
+        return includesQuery(memory.content, query) || includesQuery(memory.text, query) || includesQuery(memory.id, query);
+      });
+    }
+
+    /** Type values that really exist in the data; empty means "hide the type filter". */
+    function memoryTypes(memories) {
+      const seen = [];
+      for (const memory of Array.isArray(memories) ? memories : []) {
+        const type = memory && typeof memory.type === 'string' ? memory.type : null;
+        if (type !== null && type !== '' && !seen.includes(type)) seen.push(type);
+      }
+      return seen.sort();
+    }
+
+    /**
+     * Audit badges. `returned` only claims the Host returned text; it never claims
+     * the model received or used it. Only a real true + evidence string confirms use.
+     */
+    function injectionBadges(record, t) {
+      const source = record && typeof record === 'object' ? record : {};
+      const state = typeof source.state === 'string' ? source.state : null;
+      const badges = [];
+      if (state === 'returned') badges.push({ key: 'state', text: t('traceStateReturned'), tone: 'info' });
+      else if (state !== null) badges.push({ key: 'state', text: state, tone: 'info' });
+      else badges.push({ key: 'state', text: t('notProvided'), tone: 'muted' });
+      if (source.confirmed === true && typeof source.evidence === 'string' && source.evidence !== '') {
+        badges.push({ key: 'confirmed', text: t('traceConfirmed'), tone: 'ok' });
+      } else {
+        badges.push({ key: 'confirmed', text: t('traceUnconfirmed'), tone: 'pending' });
+      }
+      return badges;
+    }
+
+    /** Detail rows for one record. Missing values read "not provided" instead of looking like zero. */
+    function injectionRows(record, t) {
+      const source = record && typeof record === 'object' ? record : {};
+      const provided = (value, format) => (value === undefined || value === null ? t('notProvided') : format(value));
+      const listOrMissing = (value, format) => (Array.isArray(value) && value.length > 0 ? value.map(format).join('；') : t('notProvided'));
+      const pools = source.pools && typeof source.pools === 'object'
+        ? [source.pools.constraint, source.pools.dynamic].map((pool, index) => {
+          const label = index === 0 ? t('traceConstraint') : t('traceDynamic');
+          if (!pool || typeof pool !== 'object') return `${label}: ${t('notProvided')}`;
+          return `${label}: ${pool.used}/${pool.budget}`;
+        }).join(' · ')
+        : null;
+      return [
+        { key: 'snapshot', label: t('traceSnapshot'), value: provided(source.snapshot_head, (value) => String(value)) },
+        { key: 'reasons', label: t('traceReasons'), value: listOrMissing(source.reasons, (value) => String(value)) },
+        { key: 'pools', label: t('tracePools'), value: provided(pools, (value) => value) },
+        { key: 'memories', label: t('traceMemories'), value: listOrMissing(source.memories, (entry) => {
+          const id = entry && entry.id ? String(entry.id) : '?';
+          const kind = entry && entry.kind === 'constraint' ? t('traceConstraint') : t('traceDynamic');
+          const used = entry && Number.isInteger(entry.chars_used) ? ` · ${entry.chars_used}` : '';
+          return `${id}（${kind}${used}）`;
+        }) },
+        { key: 'excluded', label: t('traceExcluded'), value: listOrMissing(source.excluded, (entry) => {
+          const id = entry && entry.id ? String(entry.id) : '?';
+          const reason = entry && entry.reason ? String(entry.reason) : t('notProvided');
+          return `${id}: ${reason}`;
+        }) },
+      ];
+    }
+
+    /** Normalise a /injections answer into rows the panel can render. */
+    function injectionView(data, t, limit = 50) {
+      const records = data && Array.isArray(data.injections) ? data.injections.slice(0, limit) : [];
+      return records.map((record, index) => {
+        const source = record && typeof record === 'object' ? record : {};
+        const key = typeof source.key === 'string' && source.key !== '' ? source.key : `row-${index}`;
+        return {
+          key,
+          turn: Number.isInteger(source.turn) ? source.turn : null,
+          chars: Number.isInteger(source.chars) ? source.chars : null,
+          occurrences: Number.isInteger(source.occurrences) ? source.occurrences : null,
+          badges: injectionBadges(source, t),
+          details: injectionRows(source, t),
         };
       });
     }
@@ -893,6 +1012,63 @@ window.__ModuleLoader__.load({
         .replace('{detail}', detail === '' ? t('migrateNoSkips') : detail);
     }
 
+    /**
+     * Injection trace. Loads lazily on first expand, so the page costs nothing
+     * when nobody looks, and shows the raw audit fields without inventing any.
+     */
+    function InjectionPanel({ t }) {
+      const [loaded, setLoaded] = useState(false);
+      const [state, setState] = useState({ status: 'idle', records: [], error: null });
+      const load = () => {
+        if (typeof fetch !== 'function') {
+          setState({ status: 'error', records: [], error: 'no-fetch' });
+          return;
+        }
+        setState({ status: 'loading', records: [], error: null });
+        fetch(`${HOST_PREFIX}/injections?limit=50`, { headers: { accept: 'application/json' } })
+          .then((response) => response.text().then((raw) => {
+            let data = null;
+            try { data = JSON.parse(raw); } catch { data = null; }
+            if (!response.ok || !data || data.ok !== true) {
+              setState({ status: 'error', records: [], error: `http-${response.status}` });
+              return;
+            }
+            setState({ status: 'ready', records: Array.isArray(data.injections) ? data.injections : [], error: null });
+          }), () => setState({ status: 'error', records: [], error: 'network' }));
+      };
+      const rows = injectionView({ injections: state.records }, t);
+      return h('details', {
+        className: 'dm-trace',
+        onToggle: (event) => {
+          if (!event.currentTarget.open || loaded) return;
+          setLoaded(true);
+          load();
+        },
+      },
+        h('summary', null, t('traceTitle').replace('{count}', state.status === 'ready' ? String(rows.length) : '—')),
+        h('p', { className: 'dm-trace-hint' }, t('traceHint')),
+        state.status === 'loading' || state.status === 'idle'
+          ? h('div', { className: 'dm-loading', role: 'status' },
+            h('p', { className: 'dm-muted dm-loading-text' }, t('traceLoading')),
+            h('div', { className: 'dm-skeleton', 'aria-hidden': true }))
+          : null,
+        state.status === 'error'
+          ? h('div', { className: 'dm-notice dm-error', role: 'alert' }, h('strong', null, t('traceError')), h('p', null, state.error))
+          : null,
+        state.status === 'ready' && rows.length === 0
+          ? h('p', { className: 'dm-muted' }, t('traceEmpty'))
+          : null,
+        state.status === 'ready' && rows.length > 0
+          ? h('ol', { className: 'dm-trace-list' }, rows.map((row) => h('li', { key: row.key, className: 'dm-trace-row' },
+            h('div', { className: 'dm-trace-head' },
+              h('span', { className: 'dm-trace-turn' }, `${t('traceTurn')} ${row.turn === null ? '—' : row.turn}`),
+              h('span', { className: 'dm-trace-meta' }, `${row.chars === null ? '—' : row.chars} ${t('traceChars')} · ${row.occurrences === null ? '—' : row.occurrences} ${t('traceCalls')}`),
+              h('span', { className: 'dm-badges' }, row.badges.map((badge) => h('span', { key: badge.key, className: `dm-badge dm-badge-${badge.tone}` }, badge.text)))),
+            h('dl', { className: 'dm-trace-fields' }, row.details.map((detail) => h(React.Fragment, { key: detail.key },
+              h('dt', null, detail.label), h('dd', null, detail.value)))))))
+          : null);
+    }
+
     function MemoryPage({ sessions, t }) {
       const [state, setState] = useState({ status: 'loading', data: null, error: null });
       const [selected, setSelected] = useState(null);
@@ -907,6 +1083,8 @@ window.__ModuleLoader__.load({
       const [host, setHost] = useState({ status: 'probing', count: 0, head: null, reason: '' });
       /** Ledger contents read from the Host, shown read-only beside the local store. */
       const [ledger, setLedger] = useState([]);
+      const [query, setQuery] = useState('');
+      const [typeFilter, setTypeFilter] = useState('');
       const probeHost = () => {
         if (typeof fetch !== 'function') {
           setHost({ status: 'offline', count: 0, head: null, reason: 'no-fetch' });
@@ -1018,6 +1196,34 @@ window.__ModuleLoader__.load({
         };
       }, [revision]);
       const data = state.data;
+      // Filters only ever narrow real data; they never invent a category.
+      const activeMemories = memories.filter((memory) => memory.status === 'active');
+      const typeOptions = memoryTypes([...activeMemories, ...ledger]);
+      const shownMemories = filterMemories(activeMemories, { query, type: typeFilter });
+      const shownLedger = ledgerView(filterMemories(ledger, { query, type: typeFilter }), 20);
+      const filtersActive = query.trim() !== '' || typeFilter !== '';
+      const toolbar = activeMemories.length > 0 || ledger.length > 0
+        ? h('div', { className: 'dm-toolbar' },
+          h('label', { className: 'dm-field' },
+            h('span', { className: 'dm-field-label' }, t('search')),
+            h('input', {
+              className: 'dm-input',
+              type: 'search',
+              value: query,
+              placeholder: t('search'),
+              onChange: (event) => setQuery(event.target.value),
+            })),
+          typeOptions.length > 0
+            ? h('label', { className: 'dm-field' },
+              h('span', { className: 'dm-field-label' }, t('filterType')),
+              h('select', { className: 'dm-input', value: typeFilter, onChange: (event) => setTypeFilter(event.target.value) },
+                h('option', { value: '' }, t('filterAll')),
+                typeOptions.map((type) => h('option', { key: type, value: type }, type))))
+            : null,
+          filtersActive
+            ? h('button', { type: 'button', className: 'dm-link', onClick: () => { setQuery(''); setTypeFilter(''); } }, t('searchClear'))
+            : null)
+        : null;
       if (selected) {
         return h('section', { className: 'dm-page' },
           h(ConversationView, {
@@ -1092,11 +1298,14 @@ window.__ModuleLoader__.load({
           host.status === 'ok' && memories.length > 0
             ? h('button', { type: 'button', className: 'dm-refresh', disabled: migrating, onClick: migrateToHost }, t('migrateButton').replace('{count}', String(memories.length)))
             : null,
-          host.status === 'ok' && ledger.length > 0
+          host.status === 'ok' && shownLedger.length > 0
             ? h('section', { className: 'dm-ledger' },
-              h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(ledger.length))),
-              h('ul', { className: 'dm-ledger-list' }, ledgerView(ledger).map((row) => h('li', { key: row.id }, `${row.active ? t('ledgerActive') : t('ledgerInactive')} · ${row.text}`))))
+              h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(shownLedger.length))),
+              h('ul', { className: 'dm-ledger-list' }, shownLedger.map((row) => h('li', { key: row.id },
+                h('span', { className: `dm-type dm-type-${row.type === 'constraint' ? 'constraint' : 'plain'}` }, row.type === null ? t('notProvided') : row.type),
+                h('span', { className: 'dm-muted' }, `${row.active ? t('ledgerActive') : t('ledgerInactive')} · ${row.text}`)))))
             : null,
+          h(InjectionPanel, { t }),
           ping ? h('p', { className: 'dm-muted', role: 'status' }, ping) : null,
           state.status === 'error'
             ? h('div', { className: 'dm-notice dm-error', role: 'alert' },
@@ -1108,12 +1317,16 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dm-skeleton', 'aria-hidden': true }),
               h('div', { className: 'dm-skeleton dm-skeleton-short', 'aria-hidden': true }))
             : null,
+          toolbar,
           data
             ? h(React.Fragment, null,
-              memories.filter((memory) => memory.status === 'active').length > 0
+              filtersActive && shownMemories.length === 0 && shownLedger.length === 0
+                ? h('p', { className: 'dm-muted dm-filter-empty', role: 'status' }, t('filterEmpty'))
+                : null,
+              shownMemories.length > 0
                 ? h('details', { className: 'dm-memory-bank' },
-                  h('summary', null, t('formal').replace('{count}', memories.filter((memory) => memory.status === 'active').length)),
-                  memories.filter((memory) => memory.status === 'active').map((memory) => h(MemoryCard, {
+                  h('summary', null, t('formal').replace('{count}', shownMemories.length)),
+                  shownMemories.map((memory) => h(MemoryCard, {
                     key: `${memory.id}-${memory.version}`,
                     memory,
                     history: memories
@@ -1282,6 +1495,58 @@ window.__ModuleLoader__.load({
       @keyframes dm-pulse{0%,100%{opacity:.55}50%{opacity:1}}
       @media (prefers-reduced-motion:reduce){.dm-skeleton{animation:none}}
       @media(max-width:720px){.dm-page{padding:0 var(--dm-space-4)}.dm-header{padding:var(--dm-space-5) 0 var(--dm-space-4)}.dm-card,.dm-message,.dm-turn-box,.dm-memory-bank article{padding:var(--dm-space-3)}.dm-content{padding-bottom:var(--dm-space-5)}}
+
+      /* ---- dark developer console: tokens first, then component overrides ---- */
+      .dm-page{--dm-bg:#0b1220;--dm-bg-soft:#0f1a2b;--dm-panel:#111c2e;--dm-panel-2:#16233a;--dm-border:#1f2f4a;--dm-border-strong:#2b3f61;--dm-text:#e6edf7;--dm-text-dim:#a9bbd4;--dm-text-mute:#7d90ad;--dm-accent:#4f8cff;--dm-accent-text:#ffffff;--dm-ok:#35c07a;--dm-warn:#f0b429;--dm-danger:#ff5d5d;--dm-purple:#a07bff;background:var(--dm-bg);color:var(--dm-text)}
+      .dm-title{color:var(--dm-text)}.dm-intro,.dm-muted,.dm-open,.dm-source,.dm-version{color:var(--dm-text-dim)}
+      .dm-dayline{border-bottom-color:var(--dm-border)}.dm-timeline:before{background:var(--dm-border)}
+      .dm-marker{border-color:var(--dm-bg)}
+      .dm-refresh{background:var(--dm-panel-2);border-color:var(--dm-border-strong);color:var(--dm-text)}
+      .dm-refresh:hover:not(:disabled){background:#1d2d49;border-color:#3a5a8f}
+      .dm-primary{background:var(--dm-accent);border-color:var(--dm-accent);color:var(--dm-accent-text);font-weight:600}
+      .dm-primary:hover:not(:disabled){filter:brightness(1.08);background:var(--dm-accent)}
+      .dm-quiet{color:var(--dm-text-dim);background:var(--dm-bg-soft)}
+      .dm-back{color:var(--dm-text-dim)}.dm-back:hover{background:var(--dm-panel-2);color:var(--dm-text)}
+      .dm-card,.dm-message,.dm-turn-box,.dm-memory-bank article,.dm-tools li,.dm-history-item,.dm-review-card section{background:var(--dm-panel);border-color:var(--dm-border)}
+      .dm-card:hover{background:var(--dm-panel-2);border-color:var(--dm-border-strong)}
+      .dm-message-you{border-left-color:var(--dm-accent)}.dm-message-assistant{border-left-color:var(--dm-ok)}.dm-message-tool{border-left-color:var(--dm-warn)}
+      .dm-status-completed{color:var(--dm-ok)}.dm-status-closed_incomplete{color:var(--dm-warn)}
+      .dm-statusline{color:var(--dm-text-mute)}.dm-dot{background:var(--dm-text-mute)}
+      .dm-statusline[data-status="ok"] .dm-dot{background:var(--dm-ok)}
+      .dm-statusline[data-status="offline"] .dm-dot{background:var(--dm-warn)}
+      .dm-statusline[data-status="probing"] .dm-dot{background:var(--dm-accent)}
+      .dm-skeleton{background:var(--dm-panel-2)}
+      .dm-error{background:var(--dm-panel);border-color:#5b2b33;color:var(--dm-danger)}
+      .dm-error p{color:var(--dm-text-dim)}
+      .dm-input,.dm-textarea,.dm-merge select{background:var(--dm-bg-soft);border:1px solid var(--dm-border-strong);color:var(--dm-text);border-radius:8px;min-height:30px;padding:6px 10px;font:inherit;font-size:13px;box-sizing:border-box}
+      .dm-input:focus-visible,.dm-textarea:focus-visible,.dm-merge select:focus-visible{outline:2px solid var(--dm-accent);outline-offset:1px}
+      .dm-toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:12px 0 16px;padding:12px 14px;border:1px solid var(--dm-border);border-radius:12px;background:var(--dm-bg-soft)}
+      .dm-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+      .dm-field-label{font-size:11px;line-height:16px;color:var(--dm-text-mute)}
+      .dm-field .dm-input{width:min(280px,70vw)}
+      .dm-field select.dm-input{width:auto;min-width:120px}
+      .dm-filter-empty{padding:24px 0}
+      .dm-type{display:inline-block;margin-right:10px;padding:1px 8px;border-radius:999px;border:1px solid var(--dm-border-strong);font-size:11px;color:var(--dm-text-dim);white-space:nowrap}
+      .dm-type-constraint{color:var(--dm-purple);border-color:#3b2f66;background:#1a1430}
+      .dm-ledger-list li{display:flex;align-items:baseline;gap:4px;padding:6px 0;border-bottom:1px solid var(--dm-border)}
+      .dm-trace{margin:20px 0 0;padding:14px 16px;border:1px solid var(--dm-border);border-radius:12px;background:var(--dm-bg-soft)}
+      .dm-trace>summary{cursor:pointer;font-size:15px;font-weight:600;line-height:24px;color:var(--dm-text)}
+      .dm-trace-hint{margin:6px 0 0;font-size:12px;color:var(--dm-text-mute)}
+      .dm-trace-list{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+      .dm-trace-row{padding:12px 14px;border:1px solid var(--dm-border);border-radius:10px;background:var(--dm-panel)}
+      .dm-trace-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+      .dm-trace-turn{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--dm-text)}
+      .dm-trace-meta{font-size:12px;color:var(--dm-text-mute)}
+      .dm-badges{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+      .dm-badge{padding:1px 8px;border-radius:999px;font-size:11px;line-height:18px;border:1px solid var(--dm-border-strong);color:var(--dm-text-dim)}
+      .dm-badge-info{color:#9dc0ff;border-color:#2b4a7d;background:#16294a}
+      .dm-badge-ok{color:#8fe3b4;border-color:#1f5c3c;background:#13251c}
+      .dm-badge-pending{color:#f3cf87;border-color:#5c4a1f;background:#241d10}
+      .dm-badge-muted{color:var(--dm-text-mute)}
+      .dm-trace-fields{display:grid;grid-template-columns:120px 1fr;gap:6px 14px;margin:10px 0 0;font-size:12px;line-height:18px}
+      .dm-trace-fields dt{color:var(--dm-text-mute)}
+      .dm-trace-fields dd{margin:0;color:var(--dm-text-dim);overflow-wrap:anywhere}
+      @media(max-width:720px){.dm-trace-fields{grid-template-columns:1fr;gap:2px}.dm-trace-fields dt{margin-top:6px}.dm-badges{margin-left:0}}
     `;
 
     return {
@@ -1295,6 +1560,11 @@ window.__ModuleLoader__.load({
       createHostClient,
       hostLine,
       ledgerView,
+      filterMemories,
+      memoryTypes,
+      injectionBadges,
+      injectionRows,
+      injectionView,
       migrationSummary,
       mergeDraft,
       editMemory,

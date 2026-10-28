@@ -807,3 +807,11 @@ node --test --test-force-exit packages/dsh-memory/test/*.test.mjs
 - 未发现凭据、API key、Bearer token、密码写法。
 - 仓库内（排除 `tmp/`）未发现生产会话 ID、生产记忆正文；`tmp/l0-live-sessions/` 是既有本地工件且被 `.gitignore` 忽略，未纳入提交，本轮未删除。
 - 未修改生产数据、未重启 DSH、未启动第二实例。
+
+## 第七轮记录（未提交，UI 阶段二）
+
+深色开发者控制台改造 + 注入追踪：
+- 视觉：`.dm-page` 内定义深色令牌（近黑/深海军蓝背景、蓝色主操作、绿色正常、红色错误、紫色约束类型），组件统一覆盖；焦点环、溢出、表格滚动、响应式断点保留。
+- P1 记忆管理：搜索框 + 类型筛选（只列真实存在的类型）+ 清除；本地正式记忆与账本列表共用过滤；账本行显示类型徽标，"已生效/已撤回"保留。
+- P2 注入追踪：`<details>` 懒加载 `/injections?limit=50`；每条显示轮次、字符数、调用次数；`state: returned` 显示为"宿主已返回注入文本"，`confirmed: null` 显示为"尚未确认模型是否使用"；展开显示 snapshot_head/reasons/pools/memories/excluded，缺失字段一律"该记录未提供"；不生成任何趋势图或伪造统计。
+- 新增 `test/client-panels.test.mjs`（7 项）：过滤/类型、徽标语义、旧记录缺失字段、完整记录展示、视图归一化、主题样式契约。

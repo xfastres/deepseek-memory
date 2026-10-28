@@ -7,7 +7,12 @@ function reactStub(overrides = {}) {
     Fragment: Symbol('Fragment'),
     useEffect() {},
     useRef(value) { return { current: value === undefined ? null : value }; },
-    useState(value) { return [Object.hasOwn(overrides, 'value') ? overrides.value : value, () => {}]; },
+    // React calls a function initialiser exactly once; the stub must too, otherwise
+    // components that read `useState(() => loadStored(...))` receive the loader itself.
+    useState(value) {
+      const initial = Object.hasOwn(overrides, 'value') ? overrides.value : (typeof value === 'function' ? value() : value);
+      return [initial, () => {}];
+    },
   };
 }
 
