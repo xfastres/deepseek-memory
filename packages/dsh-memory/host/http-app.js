@@ -10,6 +10,8 @@
 
 import { join } from 'node:path';
 
+import { classifyCandidates } from './classification.js';
+
 import { createLedgerService, toApiError } from './ledger-service.js';
 import { applyMigration, planMemoryMigration } from './migration.js';
 import { createRuntimeStore } from './runtime-store.js';
@@ -312,9 +314,11 @@ export function createMemoryApp(options = {}) {
       if (req.method !== 'GET') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
       if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
       try {
+        const state = await service.state();
+        const memories = Array.isArray(state.memories) ? state.memories : [];
         writeJson(res, 200, {
           ok: true,
-          candidates: await runtime.listCandidates(),
+          candidates: classifyCandidates(await runtime.listCandidates(), memories),
           summary: await runtime.summary(),
         });
       } catch (error) {

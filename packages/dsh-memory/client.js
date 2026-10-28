@@ -55,6 +55,7 @@ window.__ModuleLoader__.load({
       history: '历史', historyLoading: '正在读取版本历史…', historyError: '无法读取版本历史。',
       origin: '来源', originRule: '自动提取', originUser: '用户手动', originLegacy: '旧数据迁移', originLlm: '模型建议',
       sourceKindUserExplicit: '用户明确', sourceKindUserCorrection: '用户纠正', sourceKindSessionExtraction: '会话提取', sourceKindAgentInference: '模型推断',
+      decisionNew: '新增', decisionDuplicate: '与现有记忆相同', decisionConflict: '需与现有记忆合并', decisionTarget: '参照 {id}',
       recentChanges: '最近变更 · Git 留痕（{count} 条）', recentChangesEmpty: '账本还没有提交记录。',
       recentChangesError: '无法读取账本变更记录。', ledgerHead: '账本 HEAD：{head}',
       historyEmpty: '没有可显示的版本。', historyVersion: '版本 {version}',
@@ -120,6 +121,7 @@ window.__ModuleLoader__.load({
       history: 'History', historyLoading: 'Reading version history…', historyError: 'Could not read the version history.',
       origin: 'Origin', originRule: 'auto-extracted', originUser: 'added by user', originLegacy: 'legacy import', originLlm: 'model suggestion',
       sourceKindUserExplicit: 'stated by user', sourceKindUserCorrection: 'user correction', sourceKindSessionExtraction: 'session extraction', sourceKindAgentInference: 'agent inference',
+      decisionNew: 'new', decisionDuplicate: 'same as an existing memory', decisionConflict: 'needs merging with an existing memory', decisionTarget: 'refers to {id}',
       recentChanges: 'Recent changes · Git trail ({count})', recentChangesEmpty: 'The ledger has no commits yet.',
       recentChangesError: 'Could not read the ledger change trail.', ledgerHead: 'Ledger HEAD: {head}',
       historyEmpty: 'No versions to show.', historyVersion: 'Version {version}',
@@ -1055,6 +1057,14 @@ window.__ModuleLoader__.load({
       return out;
     }
 
+    /** The classifier's answer in words; unknown or absent stays silent. */
+    function decisionLabel(decision, t) {
+      if (decision === 'ADD') return t('decisionNew');
+      if (decision === 'NO_CHANGE') return t('decisionDuplicate');
+      if (decision === 'CONFLICT') return t('decisionConflict');
+      return null;
+    }
+
     /** How a formal memory came to be, in words; unknown or absent stays silent. */
     function sourceKindLabel(kind, t) {
       if (kind === 'user-explicit') return t('sourceKindUserExplicit');
@@ -1120,6 +1130,9 @@ window.__ModuleLoader__.load({
         summary: data && data.summary && typeof data.summary === 'object' ? data.summary : null,
         rows: list.map((candidate) => {
           const source = candidate && typeof candidate === 'object' ? candidate : {};
+          const classification = candidate && typeof candidate === 'object' && candidate.classification && typeof candidate.classification === 'object'
+            ? candidate.classification
+            : null;
           return {
             id: typeof source.id === 'string' ? source.id : '',
             text: typeof source.text === 'string' ? source.text : '',
@@ -1127,6 +1140,8 @@ window.__ModuleLoader__.load({
             status: typeof source.status === 'string' ? source.status : null,
             reason: typeof source.reason === 'string' ? source.reason : '',
             origin: typeof source.origin === 'string' ? source.origin : null,
+            decision: classification && typeof classification.decision === 'string' ? classification.decision : null,
+            decisionTarget: classification && typeof classification.targetId === 'string' ? classification.targetId : null,
             refs: evidenceRefsOf(source),
             createdAt: typeof source.created_at === 'string' ? source.created_at : null,
           };
@@ -1669,6 +1684,8 @@ window.__ModuleLoader__.load({
         h('span', { className: 'dm-muted' }, row.text),
         row.reason === '' ? null : h('span', { className: 'dm-muted' }, row.reason),
         originLabel(row.origin, t) === null ? null : h('span', { className: 'dm-badge dm-badge-muted' }, t('origin') + ' · ' + originLabel(row.origin, t)),
+        decisionLabel(row.decision, t) === null ? null : h('span', { className: 'dm-badge dm-badge-' + (row.decision === 'ADD' ? 'ok' : row.decision === 'CONFLICT' ? 'pending' : 'muted') },
+          decisionLabel(row.decision, t) + (row.decisionTarget === null ? '' : ' · ' + t('decisionTarget').replace('{id}', row.decisionTarget))),
         ledgerEvidenceButton({ refs: row.refs }, t, openEvidence),
         row.status === 'pending'
           ? h('span', { className: 'dm-host-queue-actions' },
@@ -2118,6 +2135,7 @@ window.__ModuleLoader__.load({
       createHostClient,
       hostLine,
       changeView,
+      decisionLabel,
       originLabel,
       sourceKindLabel,
       diffLines,

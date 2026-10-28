@@ -508,3 +508,23 @@ test('a formal memory describes its origin on the row, without inventing one', a
   assert.equal(rows[0].sourceKind, 'session-extraction');
   assert.equal(rows[1].sourceKind, null);
 });
+
+test('a classified candidate says whether it is new, identical or conflicting', async () => {
+  const { plugin, t } = await load();
+  assert.equal(plugin.decisionLabel('ADD', t), '新增');
+  assert.equal(plugin.decisionLabel('NO_CHANGE', t), '与现有记忆相同');
+  assert.equal(plugin.decisionLabel('CONFLICT', t), '需与现有记忆合并');
+  assert.equal(plugin.decisionLabel(null, t), null);
+  assert.equal(plugin.decisionLabel('UPDATE', t), null, 'the UI never invents an update decision');
+
+  const rows = plugin.hostCandidateView({
+    candidates: [
+      { id: 'C-1', text: 'a', classification: { decision: 'CONFLICT', targetId: 'M-9', reason: 'overlap' } },
+      { id: 'C-2', text: 'b' },
+    ],
+  }).rows;
+  assert.equal(rows[0].decision, 'CONFLICT');
+  assert.equal(rows[0].decisionTarget, 'M-9');
+  assert.equal(rows[1].decision, null);
+  assert.equal(rows[1].decisionTarget, null);
+});

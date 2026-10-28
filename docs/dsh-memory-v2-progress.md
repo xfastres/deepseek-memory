@@ -971,3 +971,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：`runtime-store` 增加附加字段 `origin`（白名单 `rule`/`user`/`legacy`/`llm`，其余或缺失存 `null`）+ 导出 `CANDIDATE_ORIGINS`；`index.js` 自动提取写 `origin: 'rule'`；`/candidate` 透传调用方 `origin`；迁移导入写 `origin: 'legacy'`；`toUiMemory` 增加 `source_kind`；客户端 `originLabel`/`sourceKindLabel`（未知或缺失返回 null，不编造），Host 队列行与账本行分别显示来源徽标。
 - 测试：`runtime-store` +1（origin 持久化、缺失/非法为 null）；`http-app` 既有用例补断言（调用方 origin 保留、迁移候选为 legacy）；`ledger-service` +1（新增记忆 `source_kind === 'user-explicit'`）；`client-panels` +1（标签映射未知返回 null、`ledgerView` 透传 `sourceKind`）；完整套件 **256/256 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上自动提取产生的候选是否带 `origin: 'rule'`（需要真实对话与新进程）；浏览器视觉；旧 runtime.json 文档无 `origin` 时的显示（逻辑上为 null，真实旧文件未回放验证）。
+
+### 迭代 14（2026-10-28，阶段 4 前段：4.3 候选分类，不静默覆盖冲突）
+- 先说文档冲突的核实结果（本轮先查再动手）：目标文本把“4. L2 / 5. L3”排在阶段 4/5，而 `roadmap §14` 的 **D11 是“L2/L3 后置：先稳定 L1 自动提取、纠错和检索”**。逐字核对 `§12 阶段 4`：4.1 生成候选 → 4.2 证据校验 → 4.3 分类 → 4.4 Policy → 4.5 自动接受 → 4.6 自然语言异议 → 4.7 并发 → **4.8 L2 → 4.9 L3**。两者不矛盾：L2/L3 是阶段 4 的末尾而不是开头。故继续按 D11 做 4.3，不抢做 L2。
+- 缺口：`/candidates` 只把候选原文交给界面，服务端没有 ADD/UPDATE/NO_CHANGE/CONFLICT 分类；用户可能把“与现有记忆冲突”的候选直接接受成第二条互相矛盾的记忆，而路线图 4.3 要求“不把冲突静默覆盖成更新”。
+- 实现：新增纯函数模块 `host/classification.js`——`classifyCandidate(candidate, memories)` 只产出 `ADD`/`NO_CHANGE`/`CONFLICT`（**故意不产出 UPDATE**：更新是用户的合并决定，不能推断），规则为：规范化文本完全相同（且类型相容）→ NO_CHANGE；互相包含或词元 Jaccard ≥ 0.6（类型相容）→ CONFLICT；否则 ADD；非 active 记忆不参与；类型不同视为不同主张，不算重复/冲突；`classifyCandidates` 不改动入参。`GET /candidates` 读取时用当前有效记忆实时计算并附加 `classification`（不落盘、不改数据格式）。界面队列行显示「新增 / 与现有记忆相同 / 需与现有记忆合并 · 参照 M-xx」。
+- 测试：新增 `classification.test.mjs` 7 项（只产出三种取值、重复→NO_CHANGE、包含/重叠→CONFLICT、类型不同→ADD、非 active 不参与、空声明、队列映射不改入参）；`http-app` +1（接受后队列中同文本→NO_CHANGE 且 targetId 为新记忆、近似文本→CONFLICT、不同主题→ADD）；`client-panels` +1（标签映射不编造 UPDATE、缺失分类为 null）；完整套件 **265/265 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主/真实记忆规模下的分类观感与阈值合理性（0.6 只是保守起点，需 5.1 评估集校准）；浏览器视觉。

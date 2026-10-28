@@ -457,3 +457,49 @@ test('changes lists recent ledger commits newest first and validates its limit',
     assert.equal((await call(app, '/api/dsh-memory/changes', { method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: {} })).status, 405);
   });
 });
+
+test('the queue says whether a candidate is new, identical or conflicting', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const queued = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '项目使用 pnpm', type: 'fact', sessionId: 's1', turn: 1 },
+    });
+    assert.equal(queued.status, 200);
+    const empty = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(empty.json.candidates[0].classification.decision, 'ADD');
+
+    const accepted = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { candidateId: queued.json.candidate.id, action: 'accept' },
+    });
+    assert.equal(accepted.status, 200);
+    const memoryId = accepted.json.memory.id;
+
+    await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '项目使用 pnpm', type: 'fact', sessionId: 's1', turn: 1 },
+    });
+    await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '项目使用 pnpm 管理依赖', type: 'fact', sessionId: 's1', turn: 1 },
+    });
+    await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '偏好中文回答', type: 'preference', sessionId: 's1', turn: 1 },
+    });
+
+    const list = await call(app, '/api/dsh-memory/candidates');
+    const byText = new Map(list.json.candidates.map((entry) => [entry.text, entry.classification]));
+    assert.equal(byText.get('项目使用 pnpm').decision, 'NO_CHANGE');
+    assert.equal(byText.get('项目使用 pnpm').targetId, memoryId);
+    assert.equal(byText.get('项目使用 pnpm 管理依赖').decision, 'CONFLICT');
+    assert.equal(byText.get('偏好中文回答').decision, 'ADD');
+  });
+});
