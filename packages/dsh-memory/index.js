@@ -259,7 +259,7 @@ export const inject = ['webServer', 'tools'];
 export { CONTEXT_NAME };
 
 /** A compact, secret-free view of the injection cache for the ping probe. */
-function injectionSnapshot(injection) {
+function injectionSnapshot(injection, contextState) {
   if (injection === null || injection === undefined) return null;
   const snapshot = injection.snapshot;
   const latest = injection.latestObservation;
@@ -311,7 +311,8 @@ export function apply(ctx) {
   /** What the rule engine proposes for the current turn. Nothing is written. */
   let proposed = [];
   const status = () => ({
-    ...injectionSnapshot(injection),
+    ...injectionSnapshot(injection, contextState),
+    context: contextState === undefined || contextState === null ? null : { ...contextState },
     candidates: proposed.length,
     candidate_sample: proposed.slice(0, 2).map((entry) => ({ type: entry.type, rule: entry.rule, confidence: entry.confidence, text: entry.text.slice(0, 60) })),
   });
@@ -358,26 +359,54 @@ export function apply(ctx) {
       .catch(() => {});
   };
 
-  const systemPrompt = service(ctx, 'systemPrompt');  let contextOff = null;
+  const systemPrompt = service(ctx, 'systemPrompt');
+  let contextOff = null;
+  /**
+   * Registration and calls are recorded, never inferred.
+   *
+   * The prompt seam is the one place this plugin can be wrong invisibly: a
+   * context that never registered looks exactly like a workspace with nothing
+   * worth remembering. Status therefore reports which step happened.
+   */
+  const contextState = { registered: false, calls: 0, chars: 0, error: null, skipped: null };
   /**
    * Register the prompt context only once the ledger holds an active memory.
    * Prompt assembly is on the critical path of every step, so an empty store
    * keeps this plugin out of it entirely.
    */
   const ensureContext = () => {
-    if (contextOff !== null || !systemPrompt || typeof systemPrompt.context !== 'function') return;
+    if (!systemPrompt || typeof systemPrompt.context !== 'function') {
+      contextState.skipped = systemPrompt ? 'missing-context-api' : 'no-system-prompt-service';
+      return;
+    }
+    if (contextOff !== null) return;
     const eligible = injection.snapshot.memories.some((memory) => memory && memory.status === 'active');
-    if (!eligible) return;
+    if (!eligible) {
+      contextState.skipped = 'no-active-memory';
+      return;
+    }
     const provider = (context) => {
       try {
-        return injection.buildText(context && context.scope).text;
-      } catch {
+        const text = injection.buildText(context && context.scope).text;
+        contextState.calls += 1;
+        contextState.chars += text.length;
+        return text;
+      } catch (error) {
+        contextState.error = `provider: ${String(error && error.message ? error.message : error).slice(0, 120)}`;
         return '';
       }
     };
-    contextOff = systemPrompt.context({ name: CONTEXT_NAME, order: 100, text: provider });
-    if (typeof contextOff !== 'function') contextOff = () => {};
-    keep(ctx, contextOff);
+    try {
+      contextOff = systemPrompt.context({ name: CONTEXT_NAME, order: 100, text: provider });
+      if (typeof contextOff !== 'function') contextOff = () => {};
+      keep(ctx, contextOff);
+      contextState.registered = true;
+      contextState.skipped = null;
+    } catch (error) {
+      contextOff = null;
+      contextState.error = `register: ${String(error && error.message ? error.message : error).slice(0, 120)}`;
+      console.warn('[dsh-memory] prompt context registration failed:', contextState.error);
+    }
   };
 
   attempt(() => {
@@ -413,9 +442,15 @@ export function apply(ctx) {
         proposed = [];
       }
       proposeForReview(payload, proposed);
+      // A failed refresh must not skip registration: the two are separate
+      // steps, and the previous shape hid exactly that failure.
       return Promise.resolve(injection.ensureFresh())
-        .then(() => ensureContext())
-        .catch(() => {})
+        .catch((error) => {
+          contextState.error = `refresh: ${String(error && error.message ? error.message : error).slice(0, 120)}`;
+        })
+        .then(() => {
+          ensureContext();
+        })
         .then(() => next());
     };
     const off = ctx.on('agent/pre-step', onPreStep);
