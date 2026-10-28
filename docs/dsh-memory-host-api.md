@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> AI 只读搜索（§11 `memory_search`，模型工具，非 HTTP 路由）：`host/search.js` 的 `searchMemories(memories, query, { suppressedIds, type, limit, now, scope })` 复用注入所用的 `eligibility`（仅 active、未过期、内容质量、scope）并额外隐藏用户已异议的记忆，要求词面命中（不靠新近度凑结果），返回 `{ id, type, content, version, score, hits, evidence }`；空查询返回 `reason: 'empty-query'`。**不写账本、不记注入、不返回撤回/被取代/待复核内容**。
+
 > 提案面板（客户端）：`GET /proposals` 的每一行按 `target_memory_id` 与账本行对齐，修改前后用既有 diff 渲染（`before` 只来自账本中用户已看到的内容）；接受非 `add` 提案时客户端带上该记忆当前的 `changeId` 作为 `expectedBaseChangeId`，目标已消失或账本已变化时提示刷新，不静默覆盖。
 
 > AI 提案（§11 `memory_propose`）：

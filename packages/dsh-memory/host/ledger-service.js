@@ -46,6 +46,13 @@ function toUiMemory(record, version) {
     source_kind: typeof record.source_kind === 'string' ? record.source_kind : null,
     source: firstRef === null ? null : { session_id: firstRef.session_id, event_seq: firstRef.event_seq },
     source_refs: record.source_refs,
+    // Fields retrieval already consults. Without them the eligibility gate
+    // silently passed everything: expiry, private markers and tag scoring
+    // never fired because the row simply lacked the field.
+    valid_to: typeof record.valid_to === 'string' ? record.valid_to : null,
+    sensitivity: typeof record.sensitivity === 'string' ? record.sensitivity : null,
+    tags: Array.isArray(record.tags) ? record.tags.slice(0, 20) : [],
+    entities: Array.isArray(record.entities) ? record.entities.slice(0, 50) : [],
   };
 }
 

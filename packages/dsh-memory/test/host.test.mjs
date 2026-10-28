@@ -162,9 +162,10 @@ test('apply registers every route and the tool through the documented service ac
   apply(ctx);
   assert.equal(registered.length, APP_ROUTE_NAMES.length + 1);
   assert.equal(registered[0].path, PING_PATH);
-  assert.equal(tooled.length, 2, 'the ping probe and the proposal tool');
+  assert.equal(tooled.length, 3, 'the ping probe, the proposal tool and search');
   assert.equal(tooled[0].name, 'dsh_memory_ping');
   assert.equal(tooled[1].name, 'memory_propose');
+  assert.equal(tooled[2].name, 'memory_search');
 });
 
 test('apply also works when services arrive as context properties', () => {

@@ -27,6 +27,7 @@ import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
 import { loadConfig, resolveConstraints } from './host/constraints.js';
 import { extractCandidates } from './host/extraction.js';
 import { candidateStatusForPolicy, decideAutoMemory, writeAutoAccepted } from './host/auto-memory.js';
+import { searchMemories } from './host/search.js';
 
 export { API_PREFIX, isTrustedWrite, writeJson };
 
@@ -280,7 +281,81 @@ export function createProposeTool(options = {}) {
   };
 }
 
+/**
+ * §11 `memory_search`: read-only lookup of memories the injector would also use.
+ *
+ * It reuses the same eligibility gate as injection and hides memories the user
+ * objected to, so a memory that must not enter the prompt cannot be read back
+ * through a tool either. It never writes, never logs an injection, and never
+ * returns withdrawn, superseded or pending material.
+ */
+export function createSearchTool(options = {}) {
+  const getApp = typeof options.getApp === 'function' ? options.getApp : async () => null;
+  return {
+    name: 'memory_search',
+    description: 'Search the saved memories that may be used in this conversation. Read-only; returns ids, types, text and evidence pointers.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: "What to look for, in the user's words." },
+        type: { type: 'string', description: 'Optional memory type filter, e.g. fact, preference, constraint.' },
+        limit: { type: 'integer', description: 'Maximum results (1-20, default 8).' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          query: { type: 'string' },
+          results: { type: 'array' },
+          hidden: { type: 'integer' },
+          reason: { type: 'string' },
+          error: { type: 'string' },
+        },
+        required: ['ok'],
+        additionalProperties: true,
+      },
+      render(_args, value) {
+        return [{ type: 'text', text: JSON.stringify(value) }];
+      },
+    },
+    async execute(args = {}) {
+      let app;
+      try {
+        app = await getApp();
+      } catch {
+        return { ok: false, error: 'host-unavailable' };
+      }
+      if (app === null || app === undefined || app.service === undefined || app.service === null) {
+        return { ok: false, error: 'host-unavailable' };
+      }
+      let suppressedIds = [];
+      try {
+        suppressedIds = app.runtime !== null && app.runtime !== undefined && typeof app.runtime.suppressedIds === 'function'
+          ? await app.runtime.suppressedIds()
+          : [];
+      } catch {
+        // A failing objection lookup must not silently widen the search: an
+        // empty list here would show objected memories again.
+        return { ok: false, error: 'suppressed-unavailable' };
+      }
+      try {
+        const state = await app.service.state();
+        const memories = state !== null && state !== undefined && Array.isArray(state.memories) ? state.memories : [];
+        const found = searchMemories(memories, args.query, { suppressedIds, type: args.type, limit: args.limit });
+        return { ok: true, query: found.query, results: found.results, hidden: found.hidden, reason: found.reason };
+      } catch {
+        return { ok: false, error: 'search-failed' };
+      }
+    },
+  };
+}
+
 /** The plugin data directory. Overridable for tests and manual experiments. */
+
 export function resolveDataDir(env = process.env) {
   const override = env && typeof env.DSH_MEMORY_DATA_DIR === 'string' ? env.DSH_MEMORY_DATA_DIR.trim() : '';
   if (override !== '') return override;
@@ -629,6 +704,7 @@ export function apply(ctx) {
     if (tools && typeof tools.register === 'function') {
       keep(ctx, tools.register(createPingTool({ status })));
       keep(ctx, tools.register(createProposeTool({ getApp, currentTurn: () => currentTurn })));
+      keep(ctx, tools.register(createSearchTool({ getApp })));
     }
   });
 

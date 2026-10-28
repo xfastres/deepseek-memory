@@ -1065,3 +1065,11 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `client.js`：Host 客户端新增 `proposals()`、`reviewProposal({proposalId, action, expectedBaseChangeId})`；新增 `proposalView`（按 `target_memory_id` 对齐账本行，`before` 只取账本现有文本，目标缺失时 `targetFound=false` 而不是编造内容）与 `proposalActionLabel`；记忆面板新增「AI 提案」区：动作徽标、目标 id、纠错类型、理由、既有 `diffLines` 渲染的前后差异、接受/拒绝按钮；接受 update/merge/retract 时带当前 `changeId`，目标消失或 `stale` 时提示刷新而不写入；中英词典各 13 条。
 - 测试：`client-panels` +2（提案行携带用户必须确认的 `changeId`、`add` 无目标不算缺失、已消失目标标记为缺失、动作标签与未知返回 null；请求体只带真实 base id、拒绝不带 base）；完整套件 **324/324 通过**；`git diff --check` 退出码 0。
 - 未验证：浏览器实际渲染与交互（提案区的视觉、diff 折叠、按钮状态）；真实宿主里模型产出的提案在面板中的端到端；自动接受与提案面板同时存在时的排序/分页（当前各显示前 10 条）。
+
+### 迭代 24（2026-10-28，阶段 4.6 的只读搜索：`memory_search`）
+- 依据：`§11 AI 工具权限`（`memory_search` 允许，且只能搜索「当前权限允许的有效记忆」）、`D7`（异议优先于检索）。缺口：模型此前只能看到被注入 prompt 的记忆，无法按需查询；`memory_propose` 的 `targetMemoryId` 也只能靠猜。
+- 发现并修复的真实缺陷（不是新功能）：`ledger-service.js` 的 `toUiMemory` 没有把 `valid_to`/`sensitivity`/`tags`/`entities` 带给调用方，而 `retrieval.js` 的 `eligibility`/`scoreMemory` 一直在读这些字段——**注入侧的过期与 private 过滤因此从未真正生效过**（字段恒为 `undefined`）。本轮补齐映射，让既有门槛恢复作用；这是修 bug，不改账本格式与接口契约。
+- 实现：新增 `host/search.js`（纯函数，复用 `eligibility`/`scoreMemory`，异议记忆经 `suppressedIds` 隐藏，要求词面命中，返回证据指针以便提案引用）；`index.js` 新增并注册 `memory_search` 工具（无 Host、异议查询失败、状态读取失败一律 `{ok:false}`，绝不因异常放宽过滤）；`host.test` 工具数 3。
+- 测试：新增 `search.test.mjs` 6 项（命中并带证据；retracted/superseded/过期/private/他 scope/过短全部隐藏且计数；异议不可搜；空查询与非词面不返回；排序/类型过滤/上限；工具正常、无 Host、异议查询失败、状态失败四种路径）；`ledger-service` +1（状态行带 `valid_to`/`sensitivity`/`tags`/`entities`）；完整套件 **331/331 通过**；`git diff --check` 退出码 0。
+- 文档冲突（如实记录，未擅自解决）：roadmap `§11` 要求 private 记忆不被 AI 搜索，但 `provider-git-ledger/src/schema.js` 的 `validateMemory` **没有 `sensitivity` 字段**，Writer 也无法写入，因此该限制目前只能对「已有该标记的记录」生效，属于**未实现**；`tags`/`entities` 同样在 schema 中但 `ledger-service.add` 不接收，故搜索暂无法按标签命中。二者都需作为数据格式决策单独确认，本轮不扩 schema。
+- 未验证：真实宿主中的工具调用与权限过滤效果；浏览器无此入口（工具仅面向模型）。

@@ -153,3 +153,18 @@ test('a formal memory says how it came to be', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('the state row carries what retrieval needs to be safe', async () => {
+  await withService(async (service) => {
+    await service.add({
+      content: '项目使用 pnpm 管理依赖',
+      type: 'fact',
+      sourceRefs: REF,
+    });
+    const [memory] = (await service.state()).memories;
+    assert.deepEqual(memory.tags, [], 'the row carries a tag list even when the writer stored none');
+    assert.deepEqual(memory.entities, [], 'entities are an array, never absent');
+    assert.equal(memory.valid_to, null, 'no expiry is stated, not invented');
+    assert.equal(memory.sensitivity, null, 'the ledger has no private marker yet; absent means absent');
+  });
+});
