@@ -18,6 +18,58 @@
 export const ROUTE_PREFIX = '/api/dsh-memory';
 export const PING_PATH = `${ROUTE_PREFIX}/ping`;
 
+/**
+ * Runtime capability probe. The index design depends on two facts that cannot
+ * be assumed inside an Electron Host: whether `node:sqlite` is importable
+ * without a launch flag, and whether FTS5 ships with a trigram tokenizer (the
+ * only tokenizer that recalls CJK text without a word segmenter). Both are
+ * answered once per process and cached, because the answer cannot change.
+ */
+let sqliteProbe;
+
+export function probeSqlite() {
+  if (sqliteProbe === undefined) {
+    sqliteProbe = (async () => {
+      const result = { ok: false, fts5: false, trigram: false, error: null };
+      let db;
+      try {
+        const { DatabaseSync } = await import('node:sqlite');
+        db = new DatabaseSync(':memory:');
+        db.exec('CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES (\'x\');');
+        const row = db.prepare('SELECT COUNT(*) AS n FROM probe').get();
+        result.ok = Number(row && row.n) === 1;
+        try {
+          db.exec("CREATE VIRTUAL TABLE probe_fts USING fts5(content, tokenize = 'trigram');");
+          db.exec("INSERT INTO probe_fts (content) VALUES ('调用流程');");
+          const hit = db.prepare("SELECT count(*) AS n FROM probe_fts WHERE probe_fts MATCH '调用流';").get();
+          result.fts5 = true;
+          result.trigram = Number(hit && hit.n) === 1;
+        } catch (ftsError) {
+          result.error = `fts5: ${ftsError && ftsError.message ? ftsError.message : String(ftsError)}`;
+        }
+      } catch (error) {
+        result.error = error && error.message ? error.message : String(error);
+      } finally {
+        try {
+          if (db) db.close();
+        } catch {
+          // A failed close cannot change the probe answer.
+        }
+      }
+      return result;
+    })();
+  }
+  return sqliteProbe;
+}
+
+export async function probeRuntime() {
+  return {
+    node: process.versions.node,
+    electron: process.versions.electron ?? null,
+    sqlite: await probeSqlite(),
+  };
+}
+
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
@@ -68,9 +120,9 @@ export function writeJson(res, status, body) {
   res.end(payload);
 }
 
-/** Read-only liveness probe. It answers whether this Host half is reachable. */
+/** Read-only liveness probe plus the cached runtime capability answer. */
 export function createPingHandler() {
-  return (req, res) => {
+  return async (req, res) => {
     try {
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         writeJson(res, 405, { ok: false, error: 'method-not-allowed' });
@@ -83,9 +135,10 @@ export function createPingHandler() {
       writeJson(res, 200, {
         ok: true,
         plugin: '@local/dsh-memory',
-        phase: '2.1',
+        phase: '2.2',
         time: new Date().toISOString(),
         pid: process.pid,
+        runtime: await probeRuntime(),
       });
     } catch {
       try {
@@ -118,6 +171,7 @@ export function createPingTool() {
           plugin: { type: 'string' },
           phase: { type: 'string' },
           time: { type: 'string' },
+          runtime: { type: 'object' },
         },
         required: ['ok'],
         additionalProperties: true,
@@ -127,7 +181,13 @@ export function createPingTool() {
       },
     },
     async execute() {
-      return { ok: true, plugin: '@local/dsh-memory', phase: '2.1', time: new Date().toISOString() };
+      return {
+        ok: true,
+        plugin: '@local/dsh-memory',
+        phase: '2.2',
+        time: new Date().toISOString(),
+        runtime: await probeRuntime(),
+      };
     },
   };
 }

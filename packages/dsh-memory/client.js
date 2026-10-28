@@ -777,7 +777,14 @@ window.__ModuleLoader__.load({
               let data = null;
               try { data = JSON.parse(raw); } catch { data = null; }
               if (!response.ok || !data || data.ok !== true) { failed(response.status); return; }
-              setPing(t('pingOk').replace('{time}', String(data.time)));
+              const runtime = data.runtime || {};
+              const parts = [];
+              if (runtime.node) parts.push(`node ${runtime.node}`);
+              if (runtime.electron) parts.push(`electron ${runtime.electron}`);
+              if (runtime.sqlite) {
+                parts.push(`sqlite ${runtime.sqlite.ok ? (runtime.sqlite.trigram ? 'ok+trigram' : 'ok') : 'no'}`);
+              }
+              setPing(t('pingOk').replace('{time}', String(data.time)) + (parts.length > 0 ? ` · ${parts.join(' · ')}` : ''));
             }, () => failed(response.status));
           }, (error) => {
             setPing(error && error.name === 'AbortError' ? t('pingTimeout') : failed('network'));

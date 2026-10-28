@@ -39,6 +39,26 @@ Host 半边还注册了 `dsh_memory_ping` 工具。重启后我可以用 `cordis
 
 重启前查了一次 `Tool.listTools`，返回的几十个工具里**没有** `dsh_memory_ping`。这符合 Cordis 的加载方式：Host 半边在进程启动时加载，文件改动不会热更新（只有 Client 半边的界面会在刷新页面时重新加载）。所以阶段 2.1 的界面验证必须重启 DSH 应用。
 
+## 阶段 2.3 正式迁移设计
+
+**状态：设计文档完成**：[dsh-memory-host-api.md](dsh-memory-host-api.md)。
+
+定稿的两个关键决策：
+
+| 决策 | 结论 | 依据 |
+|---|---|---|
+| D1 通道 | web server 路由 + 同源 fetch | 任务板在本机已验证；Remote 是禁区 |
+| D2 数据目录 | 插件自有 `~/.dsh/dsh-memory/`，不用 `storageDomain` | `storageDomain` 要求 zod `valueSchema`，而插件目录下 zod 不可解析（已核实 `False`）；KV 无查询能力；任务板用 `~/.dsh/task-board/` 是同类先例 |
+
+另外补了一个**运行时能力探测**：`GET /ping` 现在返回 `node` / `electron` / `sqlite.ok` / `sqlite.fts5` / `sqlite.trigram`。
+
+已核实的事实：系统 Node 24 上探测结果为 `{"node":"24.16.0","electron":null,"sqlite":{"ok":true,"fts5":true,"trigram":true}}`。
+**未核实**：DSH 的 Electron 44 运行时里同样可用。这决定索引能否用 SQLite，若不可用则降级为内存倒排索引（设计中已写明降级路径）。
+
+### 本阶段测试
+
+29 / 29 通过（客户端 15 + Host 10 + 真实 HTTP 4）。
+
 ## 下一步
 
-重启 DSH → 界面点「测试 Host 连接」→ 再看 `listTools`。两项都通过后进入 2.3 正式迁移设计。
+重启 DSH → 点「测试 Host 连接」，一次拿到三个答案：路由是否挂载、fetch 是否通过认证、运行时是否支持 SQLite+FTS5 trigram。然后进入 2.4a（Host 内接入 Git 账本）。
