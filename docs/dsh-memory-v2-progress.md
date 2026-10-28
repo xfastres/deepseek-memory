@@ -59,6 +59,28 @@ Host 半边还注册了 `dsh_memory_ping` 工具。重启后我可以用 `cordis
 
 29 / 29 通过（客户端 15 + Host 10 + 真实 HTTP 4）。
 
+## 阶段 2.4a（部分）Host 存储层
+
+**状态：服务层完成并有集成测试；HTTP 路由尚未接（等通道验证）。**
+
+新增 `packages/dsh-memory/host/ledger-service.js`：包装已有的 Git 账本，暴露 `open / state / listMemories / add / update / retract`，并把账本异常映射成设计文档里的错误码表（`stale` 409、`missing` 404、`invalid` 422、`busy` 503）。
+
+关键设计选择：**并发令牌用账本自己的 change id，不用版本号**。界面拿到 `last_change_id`，编辑时原样带回；过期就得到 409 `stale`。这比版本号更精确，也与账本已有的基线检查一致。
+
+集成测试 8 项，全部跑在临时目录里的真实 Git 仓库上（非 mock）：建库、新增、更新、过期拒绝、缺失 404、幂等重放、无证据拒收、撤回。
+
+### 发现的一个迁移障碍
+
+账本 schema 要求 `active` 记忆**至少一条 `source_refs`，且每个 ref 必须带 `event_seq`**（Session 日志里的事件序号）。但界面里的旧数据只有 `{ session_id, turn }`，**没有 event_seq**。
+
+所以阶段 2.5 的迁移不能直接把 localStorage 灌进去，必须先把 `turn` 解析成真实的 `event_seq` —— 这需要 Host 读取 Session 日志，也就是设计文档里的 Q5。这个依赖比原先估计的更早出现，已记入待验证清单。
+
+### 累计测试
+
+- 客户端 15 + Host 10 + 真实 HTTP 4 = 29（快，约 0.24 秒）
+- 账本服务 8（慢，约 13 秒，因为每条都要真的 `git commit`）
+- **合计 37 项全部通过**
+
 ## 下一步
 
-重启 DSH → 点「测试 Host 连接」，一次拿到三个答案：路由是否挂载、fetch 是否通过认证、运行时是否支持 SQLite+FTS5 trigram。然后进入 2.4a（Host 内接入 Git 账本）。
+仍是重启验证通道。之后：2.4b 把路由接上这个服务，同时解决 Q5（Host 读 Session 日志拿 event_seq）。
