@@ -367,4 +367,72 @@ import('file:///C:/Users/..../.dsh/profiles/desktop/node_modules/@local/dsh-memo
 
 ## 下一步
 
-重启 → 状态行显示「已连接」→ 点导入按钮把记忆搬进账本。之后才切换读写路径。
+界面刷新后应显示「记忆库：已连接」。点「导入到记忆库」即可把本地记忆搬进 Git 账本。之后做阶段 3 注入。
+
+---
+
+# 阶段 2.4 通道验证：**通过**（2026-10-28 重启后）
+
+重启后逐项验证，全部成功。
+
+## 1. Host 半边已加载
+
+调用 `dsh_memory_ping` 工具返回：
+
+```json
+{"ok":true,"plugin":"@local/dsh-memory","phase":"2.4",
+ "runtime":{"node":"24.21.0","electron":"44.7.0",
+            "sqlite":{"ok":true,"fts5":true,"trigram":true,"error":null}}}
+```
+
+关键发现：**Electron 里 `node:sqlite` 可用，而且 FTS5 + trigram 分词器都在**。路线图里「索引用 SQLite FTS5 trigram」的假设成立，不需要换方案。
+
+## 2. HTTP 路由已挂载，而且做插件的路由不需要浏览器凭证
+
+```
+GET /api/dsh-memory/ping   -> 200 {"ok":true,...}
+GET /api/dsh-memory/state  -> 200 {"ok":true,"head":"072fb205...","memories":[]}
+GET /api/nope-xyz          -> 401 unauthorized
+GET /                       -> 401 "dsh web authentication required"
+```
+
+**插件注册的路由绕过认证层**：未注册路径和首页都返回 401，我们注册的路由直接 200。这就是任务板能工作的原因，也解释了之前命令行探测为什么全是 401——探的是没注册的路径。
+
+⚠️ 安全含义：这意味着**任何本机进程都能访问这些路由**。所以「回环 + 回环 Host + 非跨站」这道自建防护不是多余的，它是唯一的一道门。
+
+## 3. 证据解析端到端成功
+
+```
+POST /api/dsh-memory/add {sessionId:"session-69dd0347-...", turn:1}
+-> 200 {"status":"committed","memory":{"id":"M-20261028-64ee2f5f",...}}
+```
+
+真实会话 → 真实 `event_seq` → Git 提交，全链路打通。
+
+**首次尝试的 422 不是 bug**：我挑的第一个会话只有 315 字节，本来就没有轮次，返回 `no-evidence` 是正确行为。换成有内容的会话立刻成功。
+
+## 4. 真实 Git 历史
+
+`~/.dsh/dsh-memory/ledger`：
+
+```
+132599e memory(retract): M-20261028-64ee2f5f
+619dec4 memory(retract): M-20261028-5d798d92
+b3f2d72 memory(retract): M-20261028-25022f54
+9b02394 memory(add): M-20261028-25022f54
+d229e69 memory(add): M-20261028-5d798d92
+e02dacb memory(add): M-20261028-64ee2f5f
+072fb20 ledger: initialize memory repository
+```
+
+每条变更一个提交，撤回也留痕。三条验证用的临时记忆已全部撤回，账本现在 `active: 0`、`total: 3`。
+
+## 5. 修掉一个真 bug：会话读不到时返回 500
+
+验证中发现：给**不存在的 sessionId** 提交记忆返回 `500 internal`，因为 `sessionQuery` 对不存在的会话会抛异常，落在了兜底分支。
+
+「这个会话读不到」是**拒绝**，不是内部故障。已改为 `422 {"error":"no-evidence","reason":"session-unreadable"}`，并补了测试。
+
+## 测试
+
+**99 项通过。**

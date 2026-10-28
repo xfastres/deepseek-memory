@@ -315,6 +315,29 @@ test('review refuses what it cannot do instead of guessing', async () => {
   });
 });
 
+test('an unreadable session is a refusal, not an internal error', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { throw new Error('no such session'); },
+        async readEvent() { throw new Error('no such session'); },
+      },
+    });
+    const added = await call(app, '/api/dsh-memory/add', {
+      method: 'POST',
+      headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { content: '读不到会话的记忆', sessionId: 'session-missing', turn: 1 },
+    });
+    assert.equal(added.status, 422, 'a missing session must not surface as a 500');
+    assert.equal(added.json.error, 'no-evidence');
+    assert.equal(added.json.reason, 'session-unreadable');
+
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 0);
+  });
+});
+
 test('invalid bodies, wrong methods and retraction behave', async () => {
   await withApp(async (dir) => {
     const app = createMemoryApp({ dataDir: dir });

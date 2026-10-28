@@ -131,6 +131,23 @@ export function createMemoryApp(options = {}) {
     fail(res, error);
   }
 
+  /**
+   * Resolve evidence without letting a service failure become a 500.
+   *
+   * A session that does not exist makes `sessionQuery` throw, and that is a
+   * refusal ("this claim cannot be proved"), not an internal fault. The reason
+   * is reported so the caller knows why nothing was written.
+   */
+  async function resolveSafe(sessionId, turn) {
+    if (evidence === null) return { error: 'no-evidence-resolver' };
+    try {
+      const ref = await evidence.resolve({ sessionId, turn });
+      return ref === undefined || ref === null ? { error: 'no-evidence' } : { ref };
+    } catch {
+      return { error: 'session-unreadable' };
+    }
+  }
+
   const routes = {
     [`${API_PREFIX}/state`]: async (req, res) => {
       if (req.method !== 'GET') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
@@ -169,9 +186,13 @@ export function createMemoryApp(options = {}) {
         const content = typeof body.content === 'string' ? body.content.trim() : '';
         if (content === '') { writeJson(res, 400, { ok: false, error: 'empty' }); return; }
         let ref = body.sourceRef;
-        if (ref === undefined && evidence !== null && body.sessionId !== undefined && body.turn !== undefined) {
-          ref = await evidence.resolve({ sessionId: body.sessionId, turn: body.turn });
-          if (ref === undefined) { writeJson(res, 422, { ok: false, error: 'no-evidence' }); return; }
+        if (ref === undefined && body.sessionId !== undefined && body.turn !== undefined) {
+          const resolved = await resolveSafe(body.sessionId, body.turn);
+          if (resolved.error !== undefined) {
+            writeJson(res, 422, { ok: false, error: 'no-evidence', reason: resolved.error });
+            return;
+          }
+          ref = resolved.ref;
         }
         if (ref === undefined) { writeJson(res, 422, { ok: false, error: 'no-evidence' }); return; }
         const result = await service.add({
@@ -244,8 +265,13 @@ export function createMemoryApp(options = {}) {
       try {
         const body = await readJsonBody(req);
         let ref = body.sourceRef;
-        if (ref === undefined && evidence !== null && typeof body.sessionId === 'string' && Number.isInteger(body.turn)) {
-          ref = await evidence.resolve({ sessionId: body.sessionId, turn: body.turn });
+        if (ref === undefined && typeof body.sessionId === 'string' && Number.isInteger(body.turn)) {
+          const resolved = await resolveSafe(body.sessionId, body.turn);
+          if (resolved.error !== undefined) {
+            writeJson(res, 422, { ok: false, error: 'no-evidence', reason: resolved.error });
+            return;
+          }
+          ref = resolved.ref;
         }
         if (ref === undefined || ref === null) { writeJson(res, 422, { ok: false, error: 'no-evidence' }); return; }
         const candidate = await runtime.addCandidate({
