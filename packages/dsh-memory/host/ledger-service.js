@@ -69,6 +69,28 @@ export function createLedgerService(options = {}) {
     return out;
   }
 
+  /** Version timeline of one memory, oldest first. Read-only: no write path. */
+  async function history(memoryId) {
+    const ready = await open();
+    const entries = await ready.history(memoryId);
+    return entries.map((entry, index) => {
+      const change = entry && typeof entry.change === 'object' && entry.change !== null ? entry.change : {};
+      const record = entry && typeof entry.record === 'object' && entry.record !== null ? entry.record : {};
+      return {
+        version: index + 1,
+        commit: typeof entry.commit === 'string' ? entry.commit : null,
+        committed_at: typeof entry.committed_at === 'string' ? entry.committed_at
+          : (typeof change.created_at === 'string' ? change.created_at : null),
+        change_id: typeof entry.change_id === 'string' ? entry.change_id : null,
+        change_type: typeof change.change_type === 'string' ? change.change_type : null,
+        reason: typeof change.reason === 'string' ? change.reason : '',
+        actor: typeof change.actor === 'string' ? change.actor : null,
+        content: typeof record.content === 'string' ? record.content : '',
+        status: typeof record.status === 'string' ? record.status : null,
+      };
+    });
+  }
+
   async function state() {
     const ready = await open();
     const head = await ready.readHead();
@@ -127,5 +149,5 @@ export function createLedgerService(options = {}) {
     });
   }
 
-  return { open, state, listMemories, add, update, retract, apply, errorFor: toApiError };
+  return { open, state, history, listMemories, add, update, retract, apply, errorFor: toApiError };
 }

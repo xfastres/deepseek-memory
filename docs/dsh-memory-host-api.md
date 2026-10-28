@@ -88,8 +88,11 @@
 | `GET /ping` | 存活与运行时能力探测 | `runtime`（见 §2.3） |
 | `GET /state` | 一次性取全部界面状态 | `revision`、`memories`、`candidates`、`settings`、`ledger`（提交数、最后提交时间） |
 | `GET /export` | 导出完整数据 | 与现有 `dsh-memory/v1` 格式兼容，附加 `ledger_commit` |
+| `GET /history?memoryId=<id>` | 单条正式记忆的版本时间线（只读） | `memoryId`、`versions[]`（`version`、`commit`、`committed_at`、`change_id`、`change_type`、`reason`、`actor`、`content`、`status`），按提交时间从旧到新；缺 `memoryId` → 400 `missing-id`，无此记忆 → 404 `missing` |
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
+
+> 实现现状与本文档早期规划的差异（不隐藏）：当前已实现的读接口是 `/state`、`/candidates`、`/injections`、`/history`；写接口是 `/add`、`/update`、`/retract`、`/candidate`、`/review`、`/migrate`。上表中的 `revision`、`/edit`、`/settings`、`/import` 属于规划条目，尚未实现，以 `docs/dsh-memory-v2-progress.md` 的迭代记录为准。
 
 ### 3.2 写
 

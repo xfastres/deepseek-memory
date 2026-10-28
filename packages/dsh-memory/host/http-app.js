@@ -160,6 +160,26 @@ export function createMemoryApp(options = {}) {
       }
     },
 
+    [`${API_PREFIX}/history`]: async (req, res) => {
+      if (req.method !== 'GET') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      let memoryId = '';
+      try {
+        memoryId = new URL(req.url, 'http://127.0.0.1').searchParams.get('memoryId') || '';
+      } catch {
+        writeJson(res, 400, { ok: false, error: 'bad-request' });
+        return;
+      }
+      if (memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
+      try {
+        const versions = await service.history(memoryId);
+        if (versions.length === 0) { writeJson(res, 404, { ok: false, error: 'missing' }); return; }
+        writeJson(res, 200, { ok: true, memoryId, versions });
+      } catch (error) {
+        fail(res, error);
+      }
+    },
+
     [`${API_PREFIX}/export`]: async (req, res) => {
       if (req.method !== 'GET') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
       if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }

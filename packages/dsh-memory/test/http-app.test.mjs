@@ -37,7 +37,11 @@ function makeResponse() {
 
 async function call(app, path, options) {
   const res = makeResponse();
-  await app.routes[path](makeRequest(options), res);
+  const [routePath, query] = path.split('?');
+  const req = makeRequest(options);
+  // Handlers read the query from req.url; the route table is keyed by path only.
+  if (query !== undefined) req.url = path;
+  await app.routes[routePath](req, res);
   return { status: res.captured.status, json: res.captured.body === '' ? null : JSON.parse(res.captured.body) };
 }
 
@@ -367,5 +371,48 @@ test('invalid bodies, wrong methods and retraction behave', async () => {
     assert.equal(retracted.status, 200);
     const state = await call(app, '/api/dsh-memory/state');
     assert.equal(state.json.memories[0].status, 'retracted');
+  });
+});
+
+test('history returns the version timeline oldest first and refuses the rest', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+    const added = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { content: '先记住这条约定', type: 'fact', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    assert.equal(added.status, 200);
+    const memoryId = added.json.memory.id;
+    const updated = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId, content: '改成这条约定', expectedBaseChangeId: added.json.change_id },
+    });
+    assert.equal(updated.status, 200);
+
+    const history = await call(app, '/api/dsh-memory/history?memoryId=' + memoryId);
+    assert.equal(history.status, 200);
+    assert.equal(history.json.ok, true);
+    assert.equal(history.json.memoryId, memoryId);
+    assert.equal(history.json.versions.length, 2);
+    assert.deepEqual(history.json.versions.map((entry) => entry.change_type), ['ADD', 'UPDATE']);
+    assert.deepEqual(history.json.versions.map((entry) => entry.version), [1, 2]);
+    assert.equal(history.json.versions[0].content, '先记住这条约定');
+    assert.equal(history.json.versions[1].content, '改成这条约定');
+    assert.match(history.json.versions[0].commit, /^[0-9a-f]{7,40}$/u);
+    assert.equal(typeof history.json.versions[1].committed_at, 'string');
+
+    const missingId = await call(app, '/api/dsh-memory/history');
+    assert.equal(missingId.status, 400);
+    assert.equal(missingId.json.error, 'missing-id');
+
+    const unknown = await call(app, '/api/dsh-memory/history?memoryId=M-0000000000000000-000000');
+    assert.equal(unknown.status, 404);
+    assert.equal(unknown.json.error, 'missing');
+
+    const forbidden = await call(app, '/api/dsh-memory/history?memoryId=' + memoryId, { headers: { host: 'evil.example' } });
+    assert.equal(forbidden.status, 403);
+
+    const wrongMethod = await call(app, '/api/dsh-memory/history?memoryId=' + memoryId, { method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: {} });
+    assert.equal(wrongMethod.status, 405);
   });
 });

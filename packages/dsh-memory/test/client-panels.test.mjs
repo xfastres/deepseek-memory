@@ -399,3 +399,41 @@ test('the local store is labelled as unledgered and stays migratable', async () 
   assert.ok(summary !== null && summary !== undefined);
   assert.equal(typeof summary, 'string');
 });
+
+test('the history timeline keeps versions ordered and diffs them honestly', async () => {
+  const { plugin } = await load();
+
+  const rows = plugin.versionView({
+    memoryId: 'M-1',
+    versions: [
+      { version: 1, change_type: 'ADD', content: '第一版约定', change_id: 'c-1', committed_at: '2026-10-01T00:00:00Z' },
+      { version: 2, change_type: 'UPDATE', content: '第二版约定', change_id: 'c-2', committed_at: '2026-10-02T00:00:00Z', reason: '用户纠正' },
+    ],
+  }).rows;
+  assert.deepEqual(rows.map((row) => row.version), [1, 2]);
+  assert.deepEqual(rows.map((row) => row.changeType), ['ADD', 'UPDATE']);
+  assert.equal(rows[1].reason, '用户纠正');
+  assert.equal(rows[0].reason, '');
+  assert.deepEqual(plugin.versionView({}).rows, []);
+  const bare = plugin.versionView({ versions: [{}] }).rows[0];
+  assert.equal(bare.version, null);
+  assert.equal(bare.changeType, null);
+  assert.equal(bare.committedAt, null);
+  assert.equal(bare.content, '');
+
+  assert.deepEqual(plugin.diffLines('a\nb', 'a\nb'), [{ kind: 'same', text: 'a' }, { kind: 'same', text: 'b' }]);
+  assert.deepEqual(plugin.diffLines('第一版约定', '第二版约定').map((line) => line.kind).sort(), ['add', 'del']);
+  assert.deepEqual(plugin.diffLines('', '新内容'), [{ kind: 'add', text: '新内容' }]);
+  assert.deepEqual(plugin.diffLines('旧内容', ''), [{ kind: 'del', text: '旧内容' }]);
+  const inserted = plugin.diffLines('a\nc', 'a\nb\nc');
+  assert.deepEqual(inserted.map((line) => line.kind), ['same', 'add', 'same']);
+
+  const calls = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, memoryId: 'M 1', versions: [] }) };
+  });
+  await client.history({ memoryId: 'M 1' });
+  assert.equal(calls[0].url, 'api/dsh-memory/history?memoryId=M%201');
+  assert.equal(calls[0].init.method, undefined);
+});

@@ -52,6 +52,8 @@ window.__ModuleLoader__.load({
       retractFailed: '撤回未完成：{reason}', versionChanged: '账本已变化，请刷新后重试。',
       hostBusy: '账本正在写入，请稍后重试。', missingMemory: '这条记忆在账本中已不存在。',
       hostCandidates: 'Host 候选队列（{count}）',
+      history: '历史', historyLoading: '正在读取版本历史…', historyError: '无法读取版本历史。',
+      historyEmpty: '没有可显示的版本。', historyVersion: '版本 {version}',
       hostCandidateAccepted: '已接受候选，记忆已写入账本。', hostCandidateRejected: '已拒绝该候选。', hostCandidateFailed: '候选操作未完成：{reason}', hostCandidatesHint: '来自运行时数据库：接受经 Host Writer 写入 Git 账本，拒绝只改变运行时候选状态。',
       hostCandidatesEmpty: 'Host 队列里还没有候选。', hostCandidatesError: '无法读取 Host 候选队列（Host 离线或运行时不可用）。',
       search: '搜索记忆…', filterType: '类型', filterStatus: '状态', filterAll: '全部',
@@ -111,6 +113,8 @@ window.__ModuleLoader__.load({
       retractFailed: 'Retraction failed: {reason}', versionChanged: 'The ledger changed; refresh and retry.',
       hostBusy: 'The ledger is writing; retry in a moment.', missingMemory: 'This memory no longer exists in the ledger.',
       hostCandidates: 'Host candidate queue ({count})',
+      history: 'History', historyLoading: 'Reading version history…', historyError: 'Could not read the version history.',
+      historyEmpty: 'No versions to show.', historyVersion: 'Version {version}',
       hostCandidateAccepted: 'Candidate accepted; the memory is now in the ledger.', hostCandidateRejected: 'Candidate rejected.', hostCandidateFailed: 'Candidate action failed: {reason}', hostCandidatesHint: 'From the runtime database: accept writes the Git ledger via the Host Writer, reject only changes the runtime status.',
       hostCandidatesEmpty: 'The Host queue has no candidates yet.', hostCandidatesError: 'Could not read the Host candidate queue (Host offline or runtime unavailable).',
       search: 'Search memories…', filterType: 'Type', filterStatus: 'Status', filterAll: 'All',
@@ -991,6 +995,69 @@ window.__ModuleLoader__.load({
         async review(payload) {
           return post('/review', payload);
         },
+        /** Version timeline of one memory. Read-only, like /state. */
+        async history({ memoryId }) {
+          return get(`/history?memoryId=${encodeURIComponent(String(memoryId ?? ''))}`);
+        },
+      };
+    }
+
+    /**
+     * Line diff via LCS. Every emitted line is honestly unchanged, removed or
+     * added; very large inputs fall back to a coarse but still truthful split.
+     */
+    function diffLines(before, after) {
+      const split = (value) => {
+        const text = String(value ?? '');
+        return text === '' ? [] : text.split('\n');
+      };
+      const a = split(before);
+      const b = split(after);
+      if (a.length > 400 || b.length > 400) {
+        const out = [];
+        const common = Math.min(a.length, b.length);
+        let same = 0;
+        while (same < common && a[same] === b[same]) same += 1;
+        for (let index = 0; index < same; index += 1) out.push({ kind: 'same', text: a[index] });
+        for (let index = same; index < a.length; index += 1) out.push({ kind: 'del', text: a[index] });
+        for (let index = same; index < b.length; index += 1) out.push({ kind: 'add', text: b[index] });
+        return out;
+      }
+      const table = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+      for (let i = a.length - 1; i >= 0; i -= 1) {
+        for (let j = b.length - 1; j >= 0; j -= 1) {
+          table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+        }
+      }
+      const out = [];
+      let i = 0;
+      let j = 0;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { out.push({ kind: 'same', text: a[i] }); i += 1; j += 1; }
+        else if (table[i + 1][j] >= table[i][j + 1]) { out.push({ kind: 'del', text: a[i] }); i += 1; }
+        else { out.push({ kind: 'add', text: b[j] }); j += 1; }
+      }
+      while (i < a.length) { out.push({ kind: 'del', text: a[i] }); i += 1; }
+      while (j < b.length) { out.push({ kind: 'add', text: b[j] }); j += 1; }
+      return out;
+    }
+
+    /** Version timeline rows; missing fields stay null instead of being invented. */
+    function versionView(data) {
+      const list = Array.isArray(data && data.versions) ? data.versions : [];
+      return {
+        memoryId: data && typeof data.memoryId === 'string' ? data.memoryId : null,
+        rows: list.map((entry) => {
+          const source = entry && typeof entry === 'object' ? entry : {};
+          return {
+            version: Number.isInteger(source.version) ? source.version : null,
+            changeId: typeof source.change_id === 'string' ? source.change_id : null,
+            changeType: typeof source.change_type === 'string' ? source.change_type : null,
+            reason: typeof source.reason === 'string' ? source.reason : '',
+            committedAt: typeof source.committed_at === 'string' ? source.committed_at : null,
+            content: typeof source.content === 'string' ? source.content : '',
+          };
+        }),
       };
     }
 
@@ -1503,13 +1570,15 @@ window.__ModuleLoader__.load({
             row.active
               ? h('button', { type: 'button', className: 'dm-link', onClick: () => setLedgerDraft({ id: row.id, content: row.text, changeId: row.changeId, error: '' }) }, t('edit'))
               : null,
+            h('button', { type: 'button', className: 'dm-link', onClick: () => openHistory(row) }, t('history')),
             row.active && retractId === row.id
               ? h(React.Fragment, null,
                 h('button', { type: 'button', className: 'dm-link dm-danger', disabled: ledgerPending, onClick: () => retractLedger(row) }, t('confirmRetract')),
                 h('button', { type: 'button', className: 'dm-link', onClick: () => setRetractId(null) }, t('cancel')))
               : row.active
                 ? h('button', { type: 'button', className: 'dm-link', onClick: () => setRetractId(row.id) }, t('retract'))
-                : null));
+                : null),
+        history.id === row.id ? historyBlock(row) : null);
 
       /** Accept/reject run on the Host queue, so a review lands in the single writer. */
       const [queuePending, setQueuePending] = useState(null);
@@ -1537,6 +1606,38 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'dm-link', disabled: queuePending === row.id, onClick: () => reviewHostCandidate(row, 'accept') }, t('accept')),
             h('button', { type: 'button', className: 'dm-link dm-danger', disabled: queuePending === row.id, onClick: () => reviewHostCandidate(row, 'reject') }, t('reject')))
           : null);
+
+      /** Version timeline of the row whose history is open; read-only. */
+      const [history, setHistory] = useState({ id: null, status: 'idle', rows: [] });
+      const openHistory = (row) => {
+        if (history.id === row.id) {
+          setHistory({ id: null, status: 'idle', rows: [] });
+          return;
+        }
+        if (typeof fetch !== 'function') {
+          setHistory({ id: row.id, status: 'error', rows: [] });
+          return;
+        }
+        setHistory({ id: row.id, status: 'loading', rows: [] });
+        createHostClient(fetch).history({ memoryId: row.id }).then((data) => {
+          setHistory({ id: row.id, status: 'ready', rows: versionView(data).rows });
+        }, () => setHistory({ id: row.id, status: 'error', rows: [] }));
+      };
+      const historyBlock = (row) => h('div', { className: 'dm-history' },
+        history.status === 'loading'
+          ? h('p', { className: 'dm-muted' }, t('historyLoading'))
+          : history.status === 'error'
+            ? h('p', { className: 'dm-muted', role: 'alert' }, t('historyError'))
+            : history.rows.length === 0
+              ? h('p', { className: 'dm-muted' }, t('historyEmpty'))
+              : h('ol', { className: 'dm-history-list' }, history.rows.map((entry, index) => h('li', { key: (entry.changeId || 'v') + String(index), className: 'dm-history-item' },
+                h('p', { className: 'dm-muted dm-history-head' }, t('historyVersion').replace('{version}', String(entry.version === null ? index + 1 : entry.version))
+                  + ' · ' + (entry.changeType === null ? t('notProvided') : entry.changeType)
+                  + (entry.committedAt === null ? '' : ' · ' + entry.committedAt)),
+                entry.reason === '' ? null : h('p', { className: 'dm-muted' }, entry.reason),
+                h('pre', { className: 'dm-diff' }, diffLines(index === 0 ? '' : history.rows[index - 1].content, entry.content)
+                  .map((line, lineIndex) => h('code', { key: String(lineIndex), className: 'dm-diff-' + line.kind },
+                    (line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  ') + line.text + '\n')))))));
 
       if (evidence.status === 'ready' && evidence.turn) {
         return h('section', { className: 'dm-page' },
@@ -1877,6 +1978,15 @@ window.__ModuleLoader__.load({
       .dm-host-queue-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
       .dm-host-queue-row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--dm-border)}
       .dm-host-queue-actions{display:flex;gap:10px;align-items:center;margin-left:auto}
+      .dm-history{flex:1 1 100%;margin-top:10px;padding:10px 12px;border:1px solid var(--dm-border);border-radius:10px;background:var(--dm-bg-soft)}
+      .dm-history-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+      .dm-history-item{padding-bottom:8px;border-bottom:1px solid var(--dm-border)}
+      .dm-history-item:last-child{border-bottom:none;padding-bottom:0}
+      .dm-history-head{font-weight:600}
+      .dm-diff{margin:6px 0 0;padding:8px 10px;border-radius:8px;background:var(--dm-bg);overflow-x:auto;font-size:12px;line-height:1.6}
+      .dm-diff-add{color:#7ee2a8;display:block}
+      .dm-diff-del{color:#ff9d9d;display:block}
+      .dm-diff-same{color:var(--dm-muted-fg);display:block}
       .dm-ledger-row{flex-wrap:wrap}
       .dm-ledger-line{display:flex;gap:10px;align-items:baseline;min-width:0;flex:1 1 auto}
       .dm-ledger-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-left:auto}
@@ -1917,6 +2027,8 @@ window.__ModuleLoader__.load({
       reviewView,
       createHostClient,
       hostLine,
+      diffLines,
+      versionView,
       hostCandidateView,
       ledgerView,
       filterMemories,

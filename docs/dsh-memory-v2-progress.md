@@ -945,3 +945,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：迁移按钮条件改为 memories + 待评审候选数 > 0，文案由"（{count} 条）"改为"（{count} 项）"；本地候选区文案改为"本地存储 · 未进 Git 账本；Host 在线时可用上方「导入到记忆库」送入运行时队列"；迁移结果继续由 `migrationSummary` 如实统计 applied/replayed/failed 与 skipped 原因（已有测试覆盖，不隐藏拒绝）。
 - 测试：`client-panels` +1（20 项：文案含"未进 Git 账本"与迁移提示、按钮计数模板、迁移摘要含 skipped 原因仍返回字符串）；完整套件 **248/248 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上"只有候选"时的迁移往返（需要新进程与真实候选）；浏览器视觉与点击路径；迁移幂等仅在服务端测试覆盖。
+
+### 迭代 11（2026-10-28，阶段 3：记忆版本时间线与差异，只读）
+- 依据：roadmap §8.2（正常修改保留 memory_id、递增版本、旧版本 superseded、可回溯）、§10.2（单条记忆要能“查看版本差异”，修改前后用 diff 显示）；此前 `ledger-service.js:66` 内部调用 `ready.history()` 只用于算版本号，**没有任何路由把历史暴露出去**，界面只能看到当前版本与 change id。
+- 契约：新增只读 `GET /history?memoryId=<id>`（`isTrustedRead` 围栏，无写路径）：返回 `{ok, memoryId, versions[]}`，按提交从旧到新；缺 id → 400 `missing-id`，不存在的记忆 → 404 `missing`，方法错误 → 405。未改动任何既有路由或字段。
+- 改动：`ledger-service` 增加 `history(memoryId)`（version/commit/committed_at/change_id/change_type/reason/actor/content/status，缺失保持 null）；`http-app` 增加路由并登记到 `APP_ROUTE_NAMES`；客户端增加 `history()` 只读方法、LCS 行差异 `diffLines`（>400 行退化为前缀/后缀粗粒度，仍然如实标注增删）、`versionView` 归一化；账本行新增“历史”开关，展开后按版本列出提交时间、变更类型、原因与**相邻版本差异**，首版整体显示为新增；含加载/错误/空态。
+- 测试：`http-app` +1（12 项：ADD→UPDATE 两版顺序、内容、commit 形状、400/404/403/405）；`client-panels` +1（21 项：版本归一化、缺失字段为 null、差异的增/删/改/插行、空内容为零行、history 请求路径与 URL 编码）；`host` 路由清单测试改为从 `APP_ROUTE_NAMES` 推导数量，避免每加一条只读路由就改一次硬编码；完整套件 **250/250 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上点击“历史”后的渲染与真实 Git 提交时间显示；浏览器视觉；差异在超长正文下的可读性。

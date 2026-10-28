@@ -6,6 +6,7 @@ import { test } from 'node:test';
 
 import { createMemoryApp } from '../host/http-app.js';
 import {
+  APP_ROUTE_NAMES,
   apply,
   createPingHandler,
   createPingTool,
@@ -50,6 +51,7 @@ test('the Host half exposes the ping probe plus the memory routes', () => {
   assert.deepEqual(paths, [
     PING_PATH,
     '/api/dsh-memory/state',
+    '/api/dsh-memory/history',
     '/api/dsh-memory/export',
     '/api/dsh-memory/add',
     '/api/dsh-memory/update',
@@ -153,7 +155,7 @@ test('apply registers every route and the tool through the documented service ac
     effect: (fn) => { fn(); return () => {}; },
   };
   apply(ctx);
-  assert.equal(registered.length, 11);
+  assert.equal(registered.length, APP_ROUTE_NAMES.length + 1);
   assert.equal(registered[0].path, PING_PATH);
   assert.equal(tooled.length, 1);
   assert.equal(tooled[0].name, 'dsh_memory_ping');
@@ -163,7 +165,7 @@ test('apply also works when services arrive as context properties', () => {
   const registered = [];
   const webServer = { register(route) { registered.push(route); return () => {}; } };
   apply({ webServer });
-  assert.equal(registered.length, 11);
+  assert.equal(registered.length, APP_ROUTE_NAMES.length + 1);
   assert.equal(registered[0].path, PING_PATH);
 });
 
@@ -177,7 +179,7 @@ test('apply never throws and registers the route once a web server exists', () =
   assert.doesNotThrow(() => apply({ get: () => ({ register() { throw new Error('boom'); } }) }));
 
   apply({ get: (name) => (name === 'webServer' ? webServer : undefined), effect: (fn) => { fn(); return () => {}; } });
-  assert.equal(registered.length, 11);
+  assert.equal(registered.length, APP_ROUTE_NAMES.length + 1);
   assert.equal(registered[0].path, PING_PATH);
 });
 
