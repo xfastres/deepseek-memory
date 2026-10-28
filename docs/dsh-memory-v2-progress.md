@@ -138,6 +138,30 @@ interface WebRoute {
 - 账本服务 8，约 13 秒
 - **合计 59 项全部通过**
 
+## 阶段 3.1 / 3.2 起步（不依赖重启的部分）
+
+**3.1 的问题有答案了**：`agent/pre-step` 是 waterfall 事件，payload 里带 `{ agent, messages, turn, step, signal }`。也就是说注入点**能读到本轮用户消息和轮次号**，不需要别的手段。
+
+由此确定了注入方案（详见 [dsh-memory-phase3-design.md](dsh-memory-phase3-design.md)）：**pre-step 只观察不改写消息**，`systemPrompt.context` 在组装提示词时读取观察结果并注入一个独立上下文块。不往会话里塞伪造的用户消息——那会破坏“L0 是唯一事实源”。
+
+**3.2 检索已实现**：`packages/dsh-memory/host/retrieval.js`，12 项测试。
+
+打分是加权和且**保留每一项**，所以每个结果都能回答“为什么是它”：
+
+```
+总分 = 相关度×0.6 + 新近度×0.15 + 重要度×0.15 + 置信度×0.1
+置顶直接满分且不受预算限制
+```
+
+被排除的记忆都带原因（`not-active` / `expired` / `private` / `other-scope` / `no-lexical-match` / `over-limit` / `over-budget`），不是静默丢弃。
+
+### 累计测试
+
+- 快套件（客户端 15 + Host 12 + 真实 HTTP 4 + 证据 13）= 44，约 0.23 秒
+- HTTP 应用 7 + 检索 12 = 19，约 7.8 秒
+- 账本服务 8，约 13 秒
+- **合计 71 项全部通过**
+
 ## 下一步
 
-重启验证：`/api/dsh-memory/state` 是否真的被挂载、页面 fetch 能否过认证。之后 2.4c 把界面切到 Host，2.5 迁移。
+重启验证通道（唯一剩余阻塞），然后 2.4c 界面切到 Host、2.5 迁移、阶段 3.3 手动注入。
