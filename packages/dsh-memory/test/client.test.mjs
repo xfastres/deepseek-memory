@@ -352,3 +352,85 @@ test('a formal memory can be edited after acceptance and keeps the old version',
   assert.throws(() => plugin.editMemory(memory.id, '   ', 2), /empty/);
   assert.equal(JSON.parse(store[FORMAL_KEY]).filter((entry) => entry.status === 'active').length, 1);
 });
+
+function response({ status = 200, body = '', json } = {}) {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    async text() { return json === undefined ? body : JSON.stringify(json); },
+  };
+}
+
+test('the host client reads state and normalises a partial answer', async () => {
+  const plugin = await loadPlugin();
+  const calls = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    calls.push(url);
+    assert.equal(init.headers.accept, 'application/json');
+    return response({ json: { ok: true, head: 'abc1234def', memories: [{ id: 'M-1' }] } });
+  });
+  const state = await client.state();
+  assert.deepEqual(calls, ['/api/dsh-memory/state']);
+  assert.equal(state.head, 'abc1234def');
+  assert.equal(state.memories.length, 1);
+
+  const partial = plugin.createHostClient(async () => response({ json: { ok: true } }));
+  assert.deepEqual(await partial.state(), { head: null, memories: [] });
+});
+
+test('the host client names every way the Host can be unreachable', async () => {
+  const plugin = await loadPlugin();
+  const reasons = [
+    [404, 'not-mounted'],
+    [403, 'forbidden'],
+    [401, 'unauthorized'],
+  ];
+  for (const [status, reason] of reasons) {
+    const client = plugin.createHostClient(async () => response({ status }));
+    await assert.rejects(() => client.state(), (error) => {
+      assert.equal(error.reason, reason);
+      return true;
+    });
+  }
+
+  const failed = plugin.createHostClient(async () => response({ status: 409, json: { ok: false, error: 'stale' } }));
+  await assert.rejects(() => failed.state(), (error) => {
+    assert.equal(error.reason, 'stale');
+    return true;
+  });
+
+  const notJson = plugin.createHostClient(async () => response({ body: '<html>not json</html>' }));
+  await assert.rejects(() => notJson.state(), (error) => {
+    assert.equal(error.reason, 'unexpected');
+    return true;
+  });
+
+  const notOkFlag = plugin.createHostClient(async () => response({ json: { memories: [] } }));
+  await assert.rejects(() => notOkFlag.state(), (error) => {
+    assert.equal(error.reason, 'unexpected');
+    return true;
+  });
+
+  const offline = plugin.createHostClient(async () => { throw new TypeError('fetch failed'); });
+  await assert.rejects(() => offline.state(), (error) => {
+    assert.equal(error.reason, undefined);
+    assert.match(error.message, /fetch failed/);
+    return true;
+  });
+});
+
+test('the host line explains all three connection states', async () => {
+  const plugin = await loadPlugin();
+  const messages = {
+    probe: '连接中', ok: '已连接 {count} 条 提交 {head}', bad: '本地模式 {reason}',
+  };
+  const t = (key) => {
+    if (key === 'hostProbing') return messages.probe;
+    if (key === 'hostConnected') return messages.ok;
+    return messages.bad;
+  };
+  assert.match(plugin.hostLine({ status: 'probing' }, t), /连接中/);
+  assert.match(plugin.hostLine({ status: 'ok', count: 3, head: 'abcdef1234' }, t), /已连接 3 条 提交 abcdef1/);
+  assert.match(plugin.hostLine({ status: 'offline', reason: 'not-mounted' }, t), /本地模式 not-mounted/);
+  assert.match(plugin.hostLine({ status: 'offline', reason: '' }, t), /本地模式 unknown/);
+});

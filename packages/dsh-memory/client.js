@@ -31,6 +31,8 @@ window.__ModuleLoader__.load({
       pingOk: 'Host 连接正常（{time}）', pingMissing: 'Host 路由不存在，可能还没重启 DSH。',
       pingForbidden: 'Host 拒绝了请求（跨站或非本机）。', pingFailed: 'Host 无响应（{status}）。',
       pingTimeout: '连接 Host 超时，Host 可能无响应。',
+      hostProbing: '记忆库：连接中…', hostConnected: '记忆库：已连接 · {count} 条 · 提交 {head}',
+      hostOffline: '记忆库：未连接（本地模式）· {reason}',
     };
     const en = {
       panel: 'Memory', title: 'Working memory', intro: "Today's interactions with your AI, with original text and sources.",
@@ -57,6 +59,8 @@ window.__ModuleLoader__.load({
       pingOk: 'Host reached ({time})', pingMissing: 'No Host route; the DSH app may not have restarted yet.',
       pingForbidden: 'The Host refused the request (cross-site or not local).', pingFailed: 'No Host response ({status}).',
       pingTimeout: 'The Host did not answer in time.',
+      hostProbing: 'Memory store: connecting…', hostConnected: 'Memory store: connected · {count} entries · commit {head}',
+      hostOffline: 'Memory store: not connected (local mode) · {reason}',
     };
 
     const CANDIDATES_KEY = 'dsh-memory.candidates.v1';
@@ -755,6 +759,67 @@ window.__ModuleLoader__.load({
           : null);
     }
 
+    function hostError(reason, detail) {
+      const error = new Error(reason);
+      error.reason = reason;
+      if (detail !== undefined) error.detail = detail;
+      return error;
+    }
+
+    function createHostClient(fetchImpl, base) {
+      const root = base || HOST_PREFIX;
+      async function readResponse(response) {
+        if (response.status === 404) throw hostError('not-mounted');
+        if (response.status === 403) throw hostError('forbidden');
+        if (response.status === 401) throw hostError('unauthorized');
+        let data = null;
+        try {
+          data = JSON.parse(await response.text());
+        } catch {
+          data = null;
+        }
+        if (!response.ok) {
+          throw hostError(data && typeof data.error === 'string' ? data.error : `http-${response.status}`);
+        }
+        if (!data || data.ok !== true) throw hostError('unexpected');
+        return data;
+      }
+      async function get(path) {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = controller === null ? null : setTimeout(() => controller.abort(), 5000);
+        try {
+          const response = await fetchImpl(`${root}${path}`, {
+            headers: { accept: 'application/json' },
+            signal: controller === null ? undefined : controller.signal,
+          });
+          return await readResponse(response);
+        } finally {
+          if (timer !== null) clearTimeout(timer);
+        }
+      }
+      return {
+        async state() {
+          const data = await get('/state');
+          return {
+            head: typeof data.head === 'string' ? data.head : null,
+            memories: Array.isArray(data.memories) ? data.memories : [],
+          };
+        },
+        async ping() {
+          return get('/ping');
+        },
+      };
+    }
+
+    function hostLine(host, t) {
+      if (host.status === 'probing') return t('hostProbing');
+      if (host.status === 'ok') {
+        const head = host.head === null ? '—' : String(host.head).slice(0, 7);
+        return t('hostConnected').replace('{count}', String(host.count)).replace('{head}', head);
+      }
+      return t('hostOffline').replace('{reason}', host.reason || 'unknown');
+    }
+
     function MemoryPage({ sessions, t }) {
       const [state, setState] = useState({ status: 'loading', data: null, error: null });
       const [selected, setSelected] = useState(null);
@@ -764,6 +829,20 @@ window.__ModuleLoader__.load({
       const [edits, setEdits] = useState({});
       const [notice, setNotice] = useState('');
       const [ping, setPing] = useState('');
+      const [host, setHost] = useState({ status: 'probing', count: 0, head: null, reason: '' });
+      const probeHost = () => {
+        if (typeof fetch !== 'function') {
+          setHost({ status: 'offline', count: 0, head: null, reason: 'no-fetch' });
+          return;
+        }
+        setHost({ status: 'probing', count: 0, head: null, reason: '' });
+        createHostClient(fetch).state().then((data) => {
+          setHost({ status: 'ok', count: data.memories.length, head: data.head, reason: '' });
+        }, (error) => {
+          setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
+        });
+      };
+      useEffect(() => { probeHost(); }, []);
       const testHost = () => {
         setPing(t('pingWaiting'));
         const failed = (status) => setPing(t('pingFailed').replace('{status}', String(status)));
@@ -911,6 +990,7 @@ window.__ModuleLoader__.load({
             }, t(state.status === 'error' ? 'retry' : 'refresh')))),
         h('main', { className: 'dm-content' },
           notice ? h('p', { className: 'dm-muted', role: 'status' }, notice) : null,
+          h('p', { className: 'dm-muted', role: 'status' }, hostLine(host, t)),
           ping ? h('p', { className: 'dm-muted', role: 'status' }, ping) : null,
           state.status === 'error'
             ? h('div', { className: 'dm-notice dm-error', role: 'alert' },
@@ -1064,6 +1144,8 @@ window.__ModuleLoader__.load({
       compareCandidate,
       reviewCandidate,
       reviewView,
+      createHostClient,
+      hostLine,
       mergeDraft,
       editMemory,
       loadFullHistory,
