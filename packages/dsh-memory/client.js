@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       evidenceMissing: '这条记忆没有可用的原始证据引用。',
       evidenceUnavailable: '无法定位原始证据：该会话可能已不可用。',
       evidenceOutside: '该事件不在可读取的会话历史中。',
+      evidenceLocated: '已定位到产生这条记忆的用户消息（高亮显示）。',
       search: '搜索记忆…', filterType: '类型', filterStatus: '状态', filterAll: '全部',
       filterEmpty: '没有匹配这些筛选条件的记忆。', searchClear: '清除搜索',
       traceTitle: '注入追踪（{count}）', traceHint: '只读审计 · 不包含记忆正文 · 展开时才读取',
@@ -99,6 +100,7 @@ window.__ModuleLoader__.load({
       evidenceMissing: 'This memory carries no evidence reference.',
       evidenceUnavailable: 'Could not locate the evidence: that Session may be unavailable.',
       evidenceOutside: 'That event is not inside the readable Session history.',
+      evidenceLocated: 'Located the user message that produced this memory (highlighted).',
       search: 'Search memories…', filterType: 'Type', filterStatus: 'Status', filterAll: 'All',
       filterEmpty: 'No memories match these filters.', searchClear: 'Clear search',
       traceTitle: 'Injection trace ({count})', traceHint: 'Read-only audit · no memory bodies · loaded on expand',
@@ -345,12 +347,12 @@ window.__ModuleLoader__.load({
           const text = messageText(event.data);
           if (text === '') continue;
           flushTools();
-          messages.push({ id: `user-${event.seq}`, role: 'you', time: event.time, text });
+          messages.push({ id: `user-${event.seq}`, role: 'you', time: event.time, text, seq: event.seq });
         } else if (event.type === 'assistant/message') {
           const text = messageText(event.data.message);
           if (text === '') continue;
           flushTools();
-          messages.push({ id: `assistant-${event.seq}`, role: 'assistant', time: event.time, text });
+          messages.push({ id: `assistant-${event.seq}`, role: 'assistant', time: event.time, text, seq: event.seq });
         }
       }
       flushTools();
@@ -498,6 +500,13 @@ window.__ModuleLoader__.load({
         turns,
         warnings,
       };
+    }
+
+    /** Mark only the message whose event seq produced the memory. */
+    function messageClass(message, highlightSeq) {
+      const base = 'dm-message dm-message-' + (message && typeof message.role === 'string' ? message.role : 'assistant');
+      if (!Number.isInteger(highlightSeq) || !message || message.seq !== highlightSeq) return base;
+      return base + ' dm-message-hit';
     }
 
     function MemoryIcon({ size = 20 }) {
@@ -792,7 +801,7 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dm-muted', role: 'alert' }, error) : null);
     }
 
-    function ConversationView({ turn, timeZone, t, onBack, onSaved }) {
+    function ConversationView({ turn, timeZone, t, onBack, onSaved, highlightSeq }) {
       return h('section', { className: 'dm-conversation' },
         h('button', { type: 'button', className: 'dm-back', onClick: onBack }, t('back')),
         h('header', { className: 'dm-conversation-header' },
@@ -803,6 +812,9 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dm-turn-box-header' },
             h('strong', null, t('turn').replace('{turn}', turn.turn)),
             h(CandidateForm, { turn, t, onSaved })),
+          Number.isInteger(highlightSeq)
+            ? h('p', { className: 'dm-muted dm-evidence-located' }, t('evidenceLocated'))
+            : null,
           h('ol', { className: 'dm-messages' },
           turn.messages.length === 0
             ? h('li', { className: 'dm-muted' }, t('noContent'))
@@ -814,7 +826,7 @@ window.__ModuleLoader__.load({
                     h('strong', null, item.name),
                     item.text === '' ? null : h(FormattedText, { text: item.text }))))))
               : h('li', {
-                key: message.id, className: `dm-message dm-message-${message.role}`,
+                key: message.id, className: messageClass(message, highlightSeq),
               },
                 h('div', { className: 'dm-message-meta' },
                   h('strong', null, t(message.role)),
@@ -1356,6 +1368,7 @@ window.__ModuleLoader__.load({
         return h('section', { className: 'dm-page' },
           h(ConversationView, {
             turn: evidence.turn, timeZone: data && data.time_zone, t,
+            highlightSeq: evidence.ref ? evidence.ref.event_seq : null,
             onBack: () => setEvidence({ status: 'idle', turn: null, ref: null }),
             onSaved: (next) => { setCandidates(next); setNotice(t('saved')); },
           }));
@@ -1675,6 +1688,8 @@ window.__ModuleLoader__.load({
       .dm-field select.dm-input{width:auto;min-width:120px}
       .dm-filter-empty{padding:24px 0}
       .dm-evidence{margin-top:8px}
+      .dm-evidence-located{margin:10px 0 0}
+      .dm-message-hit{outline:2px solid var(--dm-accent);outline-offset:2px}
       .dm-ledger-list li .dm-link{margin-left:auto}
       .dm-type{display:inline-block;margin-right:10px;padding:1px 8px;border-radius:999px;border:1px solid var(--dm-border-strong);font-size:11px;color:var(--dm-text-dim);white-space:nowrap}
       .dm-type-constraint{color:var(--dm-purple);border-color:#3b2f66;background:#1a1430}
@@ -1720,6 +1735,7 @@ window.__ModuleLoader__.load({
       locateTurnForEvent,
       evidenceTurn,
       ledgerEvidenceButton,
+      messageClass,
       loadInjections,
       candidateErrorKey,
       candidateSubmitDisabled,

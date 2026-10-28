@@ -271,3 +271,18 @@ test('ledger rows carry their evidence and offer an action only when they have o
   assert.equal(called[0].source_refs[0].event_seq, 3);
   assert.equal(plugin.ledgerEvidenceButton(rows[1], t, () => {}), null);
 });
+
+test('only the message produced by the evidence event is highlighted', async () => {
+  const { plugin, t } = await load();
+  const messages = plugin.conversationMessages([
+    { type: 'user/message', seq: 11, time: 1700000000000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '记住我喜欢简洁' }] } },
+    { type: 'assistant/message', seq: 12, time: 1700000000001, data: { message: { content: [{ type: 'text', text: '好的。' }] } } },
+  ]);
+  assert.equal(messages[0].seq, 11);
+  assert.equal(messages[1].seq, 12);
+  assert.equal(plugin.messageClass(messages[0], 11), 'dm-message dm-message-you dm-message-hit');
+  assert.equal(plugin.messageClass(messages[1], 11), 'dm-message dm-message-assistant');
+  assert.equal(plugin.messageClass(messages[0], null), 'dm-message dm-message-you');
+  assert.equal(plugin.messageClass(messages[0], 99), 'dm-message dm-message-you');
+  assert.equal(t('evidenceLocated').includes('高亮'), true);
+});

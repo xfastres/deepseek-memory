@@ -911,3 +911,9 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：`client.js` 新增 `evidenceRefsOf` / `locateTurnForEvent` / `evidenceTurn` / `ledgerEvidenceButton`；正式记忆卡与账本行在**确有 source_refs/source** 时显示"查看原始证据"，点击后经 `sessions.retain` 读取真实会话事件并复用 `ConversationView` 展示该轮；无引用、事件不在窗口、会话不可用三种情况分别给出不同提示，不伪造引用。
 - 测试：`client-panels` 新增 4 项（引用归一化与去重、seq 归属轮次、从会话事件重建轮次、账本行 refs 与按钮条件）；完整套件 **242/242 通过**；`git diff --check` 退出码 0。
 - 未验证：浏览器真实点击与视觉；真实宿主上旧会话（非今日）能否 retain 并读取；未对生产数据做任何写入。
+
+### 迭代 6（2026-10-28，L0 收尾：精确定位产生记忆的事件）
+- 依据：roadmap §4.1"记忆记录保存会话 ID、事件序号"，§12 阶段 3.5"能按会话/轮次查看具体记忆"；迭代 5 只跳到所属轮次，未指出具体事件。
+- 改动：`conversationMessages` 为 you/assistant 消息附加真实 `seq`；新增 `messageClass`（仅当 seq 精确匹配才加 `dm-message-hit`，seq 缺失或整数不匹配一律不加）；`ConversationView` 接受 `highlightSeq`，证据视图传入引用中的 `event_seq`，并在消息列表上方显示"已定位到产生这条记忆的用户消息（高亮显示）"；样式新增 2px 主题色描边。
+- 测试：`client-panels` +1（15 项，覆盖匹配/不匹配/缺失三种情况与提示文案）；完整套件 **243/243 通过**；`git diff --check` 退出码 0。
+- 未验证：浏览器中的高亮外观与是否需要滚动到命中位置；真实宿主旧会话的证据跳转未点击验证。
