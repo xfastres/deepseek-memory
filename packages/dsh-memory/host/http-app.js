@@ -57,15 +57,17 @@ export function isTrustedRead(req) {
 }
 
 /**
- * Write fence: a read-fence pass PLUS a browser same-origin marker. A bare
- * local curl is refused, because it can mutate memories.
+ * Write fence: the same check as reads, deliberately.
+ *
+ * This mirrors the shipped task board's `isLoopbackRequest`, which guards its
+ * ledger with exactly these checks and no extra browser marker. An extra
+ * marker requirement would refuse writes from a shell that does not send
+ * `Origin`, while reads kept working — a half-broken panel that is worse than
+ * either choice. What still stops a hostile page is the cross-site check here,
+ * the JSON content type (which forces a CORS preflight cross-origin), and the
+ * web server's authentication layer in front of every route.
  */
-export function isTrustedWrite(req) {
-  if (!isTrustedRead(req)) return false;
-  const headers = req.headers || {};
-  if (headers['sec-fetch-site'] === 'same-origin') return true;
-  return typeof headers.origin === 'string';
-}
+export const isTrustedWrite = isTrustedRead;
 
 async function readJsonBody(req) {
   const chunks = [];

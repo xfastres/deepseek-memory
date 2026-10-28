@@ -66,7 +66,11 @@ window.__ModuleLoader__.load({
     const CANDIDATES_KEY = 'dsh-memory.candidates.v1';
     const FORMAL_KEY = 'dsh-memory.formal.v1';
     const EXPORT_FORMAT = 'dsh-memory/v1';
-    const HOST_PREFIX = '/api/dsh-memory';
+    // DOCUMENT-RELATIVE on purpose: the Host registers `/api/dsh-memory`, but
+    // the page is served with `<base href="./">`, so a leading slash would
+    // escape a sub-path deployment. The shipped task board solves it the same
+    // way (it drops the leading slash for exactly this reason).
+    const HOST_PREFIX = 'api/dsh-memory';
     const dayFormatter = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' });
     const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const dayKey = (milliseconds) => dayFormatter.format(new Date(milliseconds));

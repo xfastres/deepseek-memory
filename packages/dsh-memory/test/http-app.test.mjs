@@ -64,14 +64,32 @@ test('state answers an empty ledger and refuses untrusted callers', async () => 
   });
 });
 
-test('a mutation without a browser marker is refused', async () => {
+test('the write fence matches the shipped task board: loopback and host, not a browser marker', async () => {
   await withApp(async (dir) => {
     const app = createMemoryApp({ dataDir: dir });
+    // A local client with no Origin and no Sec-Fetch-Site still reaches the
+    // handler, exactly like the task board's ledger. Evidence is what decides.
     const bare = await call(app, '/api/dsh-memory/add', {
       method: 'POST', headers: JSON_HEADERS, body: { content: 'x', sourceRef: { session_id: 's', event_seq: 1 } },
     });
-    assert.equal(bare.status, 403);
-    assert.equal(bare.json.error, 'forbidden');
+    assert.equal(bare.status, 200);
+
+    // A cross-site request is still refused before anything is written.
+    const crossSite = await call(app, '/api/dsh-memory/add', {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, 'sec-fetch-site': 'cross-site', origin: 'http://evil.example.com' },
+      body: { content: 'y', sourceRef: { session_id: 's', event_seq: 1 } },
+    });
+    assert.equal(crossSite.status, 403);
+
+    const foreignHost = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...JSON_HEADERS, host: 'evil.example.com' },
+      body: { content: 'z', sourceRef: { session_id: 's', event_seq: 1 } },
+    });
+    assert.equal(foreignHost.status, 403);
+
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 1, 'only the accepted write landed');
   });
 });
 

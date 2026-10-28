@@ -370,7 +370,7 @@ test('the host client reads state and normalises a partial answer', async () => 
     return response({ json: { ok: true, head: 'abc1234def', memories: [{ id: 'M-1' }] } });
   });
   const state = await client.state();
-  assert.deepEqual(calls, ['/api/dsh-memory/state']);
+  assert.deepEqual(calls, ['api/dsh-memory/state'], 'document-relative, never root-absolute');
   assert.equal(state.head, 'abc1234def');
   assert.equal(state.memories.length, 1);
 

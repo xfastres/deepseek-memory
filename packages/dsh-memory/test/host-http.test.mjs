@@ -130,13 +130,15 @@ test('the memory routes answer over a real socket, with the fence intact', async
     const forged = await request(port, { path: '/api/dsh-memory/state', headers: { host: 'evil.example.com' } });
     assert.equal(forged.status, 403);
 
-    const write = await request(port, {
+    const crossSite = await request(port, {
       path: '/api/dsh-memory/add',
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: { content: '从命令行写入', sourceRef: { session_id: 's', event_seq: 1 } },
+      headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site', origin: 'http://evil.example.com' },
+      body: { content: '从别的站点写入', sourceRef: { session_id: 's', event_seq: 1 } },
     });
-    assert.equal(write.status, 403, 'a bare local client cannot mutate memories');
+    assert.equal(crossSite.status, 403, 'a cross-site page cannot mutate memories');
+    const after = await request(port, { path: '/api/dsh-memory/state' });
+    assert.equal(JSON.parse(after.body).memories.length, 0, 'the refused write left nothing behind');
   } finally {
     server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
