@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 记忆类型（写入约束）：候选的 `type` 落库前统一为账本词汇 `MEMORY_TYPES`；规则名 `instruction` 映射为 `constraint`（同一含义，避免接受时才因类型不合法失败）。账本无法存储的类型在 `/review` 接受时返回 `422 {"error":"invalid-type","candidateType":...}`，候选保持 `pending`，不写入、不改类型。
+
 > 策略决策（实现字段，只读派生）：`GET /candidates` 的每一项还带 `policy: { decision, reasons }`，取值即路线图 §7.1 的五种：`AUTO_ACCEPT` / `REVIEW_REQUIRED` / `CONFLICT` / `NO_CHANGE` / `REJECT`。当前 `AUTO_ACCEPT` 恒不会发生（自动接受开关未实现，合格候选返回 `REVIEW_REQUIRED` + `auto-accept-disabled`），因此该字段只表达“能做什么”，不代表已写入；写入仍只能经用户确认的 `/review`。
 
 > 候选分类（实现字段，只读派生）：`GET /candidates` 的每一项带 `classification: { decision, targetId, reason }`，`decision` 只会是 `ADD`（新）/`NO_CHANGE`（与现有记忆相同）/`CONFLICT`（需合并，绝不静默覆盖）；`reason` 为 `new`/`duplicate`/`included`/`overlap`/`empty`。该字段按读取时的有效记忆实时计算，不写入任何存储。

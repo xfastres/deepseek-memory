@@ -18,6 +18,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import { join } from 'node:path';
 
 import { LedgerLockError, RepoLock } from '../../provider-git-ledger/src/lock.js';
+import { toLedgerType } from './memory-types.js';
 
 export const RUNTIME_FILE = 'runtime.json';
 export const RUNTIME_VERSION = 1;
@@ -156,7 +157,9 @@ export function createRuntimeStore(options = {}) {
         const candidate = {
           id: candidateId(now()),
           text,
-          type: typeof input.type === 'string' ? input.type : 'fact',
+          // Stored in the ledger vocabulary so review cannot fail later on a
+          // type the ledger refuses. An unsupported kind is kept as-is.
+          type: (typeof input.type === 'string' ? toLedgerType(input.type) : null) ?? (typeof input.type === 'string' ? input.type : 'fact'),
           status: 'pending',
           session_id: sessionId,
           turn,

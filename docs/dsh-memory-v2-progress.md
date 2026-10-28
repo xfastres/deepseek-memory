@@ -986,3 +986,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 刻意不做：不启用自动写入（D9 与 §7.2 的候选状态机 `proposed/validating/review_pending/auto_accepted/...` 尚未实现，运行时候选仍只有 `pending/accepted/rejected`）；该已知缺口如实记录，不在本轮伪装完成。
 - 测试：新增 `policy.test.mjs` 6 项（五种取值、无证据/非法类型、重复/冲突、敏感/低置信/仅用户类型、自动接受关闭与开启、队列标注不改入参）；`http-app` 既有分类用例补 3 条 policy 断言；`client-panels` +1（含 `auto-accept-disabled` 的诚实措辞、未知决策返回 null）；完整套件 **272/272 通过**；`git diff --check` 退出码 0。
 - 未验证：真实候选流上 policy 的实际分流分布（要等 5.1 评估集）；阈值 0.6 与实际置信度来源（extraction 的 confidence 0.6 固定值）是否匹配；浏览器视觉。
+
+### 迭代 16（2026-10-28，修复真实写入缺陷：提取类型无法被账本接受）
+- 发现方式：核对 5.1 评估集前置条件时，逐字比对 `extraction.js` 的规则输出与 `provider-git-ledger/src/schema.js` 的 `MEMORY_TYPES`——提取的 `instruction` 规则产出 `type: 'instruction'`，而账本 `MEMORY_TYPES` 没有该类型；`/review` 接受时把 `candidate.type` 直接传给 `service.add`，因此“记住，以后回答用中文”这类最常见的用户指令候选会在接受时以 `422 invalid` 失败（SchemaError 被映射为 422）。这是既有链路里的真实缺陷，不是新功能。
+- 修复：新增 `host/memory-types.js`（`TYPE_ALIASES = { instruction: 'constraint' }`、`toLedgerType()`）——只映射含义相同的类型，未知类型返回 `null` 而不猜成 `fact`；`runtime-store` 写入候选时把规则类型映射为账本词汇（未知类型保持原样，不静默改写）；`/review` 接受前再次映射，无法存储的类型返回 `422 invalid-type` 并附 `candidateType`，候选保持 `pending`、不写入。
+- 文档冲突状态更新：此前记录的“`persona.js` PERSONA_TYPES 含 `instruction` 而账本 MemoryType 不含”这一冲突，现在有了单一映射出口 `memory-types.js`；L3/persona 仍按 D11 后置，本轮不改 persona 语义。
+- 测试：新增 `memory-types.test.mjs` 3 项（账本类型原样通过、instruction→constraint、未知/缺失返回 null）；`http-app` +2（`instruction` 候选存储为 `constraint` 且接受成功、类型不合法时候选保持 pending 且账本零写入）；完整套件 **277/277 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上自动提取产生的指令候选（需真实对话与新进程）；生产 `runtime.json` 现有的 4 条候选均为 `fact`，未受此缺陷影响（只读核对，未修改）。

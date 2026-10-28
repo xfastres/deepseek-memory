@@ -508,3 +508,61 @@ test('the queue says whether a candidate is new, identical or conflicting', asyn
     assert.deepEqual(byPolicy.get('偏好中文回答'), { decision: 'REVIEW_REQUIRED', reasons: ['auto-accept-disabled'] });
   });
 });
+
+test('an extracted instruction is stored and accepted as a constraint', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const queued = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '记住，以后回答用中文', type: 'instruction', sessionId: 's1', turn: 1 },
+    });
+    assert.equal(queued.status, 200);
+    assert.equal(queued.json.candidate.type, 'constraint', 'the queue stores ledger vocabulary');
+
+    const accepted = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { candidateId: queued.json.candidate.id, action: 'accept' },
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.json.memory.type, 'constraint');
+    assert.equal(accepted.json.status, 'committed');
+
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories[0].type, 'constraint');
+  });
+});
+
+test('accepting a candidate whose type the ledger cannot store is refused with a reason', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const queued = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '一条来路不明的候选', type: 'gossip', sessionId: 's1', turn: 1 },
+    });
+    assert.equal(queued.status, 200);
+    const refused = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { candidateId: queued.json.candidate.id, action: 'accept' },
+    });
+    assert.equal(refused.status, 422);
+    assert.equal(refused.json.error, 'invalid-type');
+    assert.equal(refused.json.candidateType, 'gossip');
+
+    const list = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(list.json.candidates[0].status, 'pending', 'a refused candidate stays pending');
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 0);
+  });
+});

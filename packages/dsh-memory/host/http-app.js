@@ -12,6 +12,7 @@ import { join } from 'node:path';
 
 import { classifyCandidates } from './classification.js';
 import { evaluateCandidatePolicies } from './policy.js';
+import { toLedgerType } from './memory-types.js';
 
 import { createLedgerService, toApiError } from './ledger-service.js';
 import { applyMigration, planMemoryMigration } from './migration.js';
@@ -382,9 +383,16 @@ export function createMemoryApp(options = {}) {
         }
         if (body.action === 'accept') {
           const content = typeof body.content === 'string' && body.content.trim() !== '' ? body.content.trim() : candidate.text;
+          // Older candidates may still carry a rule kind the ledger does not
+          // know; refusing here beats returning an opaque schema error.
+          const type = toLedgerType(candidate.type);
+          if (type === null) {
+            writeJson(res, 422, { ok: false, error: 'invalid-type', candidateType: candidate.type ?? null });
+            return;
+          }
           const result = await service.add({
             content,
-            type: candidate.type,
+            type,
             sourceRefs: candidate.source_refs,
             idempotencyKey: `candidate:${candidate.id}`,
           });
