@@ -721,3 +721,28 @@ test('a tag or entity can be found by typing it', async () => {
   assert.deepEqual(plugin.filterMemories(memories, { query: 'pnpm' }).map((memory) => memory.id), ['M-1']);
   assert.deepEqual(plugin.filterMemories(memories, { query: '中文' }).map((memory) => memory.id), ['M-2']);
 });
+
+test('a change row keeps its before and after states without inventing them', async () => {
+  const { plugin } = await load();
+  const view = plugin.changeView({
+    head: 'abc123',
+    changes: [
+      {
+        commit: 'c1', change_type: 'UPDATE', memory_id: 'M-1',
+        before: { content: '项目使用 pnpm', status: 'active', type: 'fact' },
+        after: { content: '项目使用 pnpm 9', status: 'active', type: 'fact' },
+      },
+      {
+        commit: 'c2', change_type: 'ADD', memory_id: 'M-1',
+        before: null,
+        after: { content: '项目使用 pnpm', status: 'active', type: 'fact' },
+      },
+      { commit: 'c3', change_type: 'RETRACT', memory_id: 'M-1', before: 'not-an-object', after: { content: 7 } },
+    ],
+  });
+  assert.equal(view.rows[0].before.content, '项目使用 pnpm');
+  assert.equal(view.rows[0].after.content, '项目使用 pnpm 9');
+  assert.equal(view.rows[1].before, null, 'an ADD really has nothing before it');
+  assert.equal(view.rows[2].before, null, 'a malformed state is absent, not half-read');
+  assert.equal(view.rows[2].after.content, null, 'a non-string field is not presented as text');
+});

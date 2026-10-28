@@ -126,6 +126,33 @@ export function createLedgerService(options = {}) {
           content = null;
         }
       }
+      // What the change actually changed (§4.6 review): the record at this
+      // commit is the after-state, the parent commit holds the before-state.
+      // A missing parent or unreadable file yields null, never a guess.
+      const recordAt = async (commit, id) => {
+        if (id === null || typeof commit !== 'string' || commit === '') return null;
+        try {
+          const record = JSON.parse(await ready.git.show(commit, `records/${id}.json`));
+          if (record === null || typeof record !== 'object') return null;
+          return {
+            content: typeof record.content === 'string' ? record.content : null,
+            status: typeof record.status === 'string' ? record.status : null,
+            type: typeof record.type === 'string' ? record.type : null,
+          };
+        } catch {
+          return null;
+        }
+      };
+      const after = await recordAt(hash, memoryId);
+      let before = null;
+      if (change.change_type !== 'ADD' && memoryId !== null) {
+        try {
+          const parent = String(await ready.git.run(['rev-parse', `${hash}^`])).trim();
+          before = await recordAt(parent, memoryId);
+        } catch {
+          before = null;
+        }
+      }
       changes.push({
         commit: hash,
         committed_at: typeof time === 'string' && time !== '' ? time : null,
@@ -135,6 +162,8 @@ export function createLedgerService(options = {}) {
         reason: typeof change.reason === 'string' ? change.reason : '',
         memory_id: memoryId,
         content,
+        before,
+        after,
       });
     }
     return { head, changes };

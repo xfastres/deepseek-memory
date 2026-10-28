@@ -1170,3 +1170,12 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：新增 `entity-match.test.mjs` 4 项（继承已确认名、不发明/单字符忽略、仅 active 且去重、上限 50）；`runtime-store` +1（候选实体过滤）；`http-app` +1（候选带 entities → 审核接受 → 账本与 `/state` 均可见）；`host` +1（真实账本 + 真实 pre-step：只继承被提到的那一个实体，未提到的 `yarn` 不进入）；完整套件 **365/365 通过**；`git diff --check` 退出码 0。
 - 过程中修正：首次接入时无实体候选向 Writer 传了 `entities: undefined`，使既有「自动接受的写入形状」测试失败；改为**有实体才传**，让旧行为逐字保持不变（不是放宽断言）。
 - 未验证：真实会话中实体名是否会被自然提及（有真实数据才知道覆盖率）；浏览器端徽标展示未验证；实体只能来自用户/审核已写入的 `entities`，系统仍不会自动发现新实体。
+
+### 迭代 34（2026-10-28，阶段 3：Git 留痕显示「这次改成了什么」）
+- 依据：`roadmap §4.6`（变更审查需要差异，而不只是提交列表）、`§5.3`（Git 是唯一历史来源）。缺口证据：`/changes` 只返回 `change_type`/`content`/`reason` 等，无法看出 UPDATE/RETRACT 前后差别，面板只能显示「UPDATE · 某句话」。
+- 实现：
+  - `host/ledger-service.js`：`recentChanges` 为每条变更补 `before`/`after`（`{content,status,type}` 或 null）。`after` 取该 commit 的 `records/<id>.json`；`before` 取 `git rev-parse <commit>^` 指向的父提交同名文件。ADD 的 before 固定 null；父提交不可解析或文件不可读时 null——**不凭空构造差异**。既有返回键一个未改。
+  - `client.js`：`changeView` 透传 `before`/`after`（非对象按 null，非字符串字段按 null）；Git 留痕行新增只读差异行（内容变化显示「旧 → 新」，状态变化显示「旧状态 → 新状态」），并加一条窄屏可换行的样式。
+- 测试：`ledger-service` +2（ADD/UPDATE/RETRACT 三种差异正确；记录缺失时 before 为 null）；`http-app` +1（`/changes` 返回 UPDATE 的前后内容）；`client-panels` +1（映射保留前后、ADD 无 before、畸形字段不冒充文本）；完整套件 **369/369 通过**；`git diff --check` 退出码 0。
+- 过程中发现：自己第一版补丁脚本的中文锚点写错导致**整份修改未落盘**（脚本在写文件前抛错），检查后重跑并逐项验证补丁确实生效，没有把「脚本打印成功」当成已完成。
+- 未验证：浏览器实际渲染（差异行样式未在浏览器验证）；每条变更多两次 Git 子进程读取（`/changes` 上限 20 条时最多约 40 次），真实仓库规模下的耗时未测量；SUPERSEDE 的语义（新旧两个 memory id）目前只按结果 id 记录，未做跨记录差异。

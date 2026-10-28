@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 变更差异（§4.6）：`GET /changes` 的每条变更新增 `before`/`after`（各为 `{content, status, type}` 或 `null`，不新增/不改动既有键）。`after` 读该 commit 的 `records/<id>.json`，`before` 读父 commit 的同名文件；ADD 的 `before` 为 `null`，文件缺失或首提交无父时同样为 `null`（不猜测）。面板在 Git 留痕里显示「旧 → 新」与状态变化。
+
 > 候选的实体继承（§4.2）：`POST /candidate` 接受可选 `entities`（字符串数组），审核通过时随 `service.add` 写入账本；宿主在 `agent/pre-step` 抽取候选时会自动继承**账本里已存在且该句提到的**实体名（`host/entity-match.js`：仅 active 记忆、大小写不敏感、忽略单字符、上限 50），不生成任何新实体。没有可继承实体的候选写入与此前完全一致（`entities` 不落空数组覆盖）。
 
 > 结构化字段（L1 账本 schema 已有，此前被写入层丢弃）：`POST /add` 与 `POST /update` 接受可选 `tags`（字符串数组，≤20）与 `entities`（字符串数组，≤50），原样交给账本校验器：合法列表写入记录，类型不合法由 schema 拒绝并返回 422 `invalid`，不会被静默忽略。`/update` 省略列表时保留原值，显式给出非空列表时替换（账本提供方的既有语义，宿主不额外改写）。

@@ -203,3 +203,49 @@ test('tags and entities reach the ledger instead of being dropped', async () => 
     assert.deepEqual(unchanged.memory.tags, ['tooling', 'pnpm']);
   });
 });
+
+test('the change list shows what each change did to the record', async () => {
+  await withService(async (service) => {
+    const added = await service.add({ content: '项目使用 pnpm', type: 'fact', sourceRefs: REF });
+    const updated = await service.update({
+      memoryId: added.memory.id,
+      content: '项目使用 pnpm 9',
+      expectedBaseChangeId: added.memory.last_change_id,
+    });
+    await service.retract({
+      memoryId: added.memory.id,
+      expectedBaseChangeId: updated.memory.last_change_id,
+      reason: '项目迁移',
+    });
+
+    const { changes } = await service.recentChanges();
+    assert.equal(changes.length, 3);
+
+    const retract = changes[0];
+    assert.equal(retract.change_type, 'RETRACT');
+    assert.equal(retract.before.content, '项目使用 pnpm 9');
+    assert.equal(retract.before.status, 'active');
+    assert.equal(retract.after.status, 'retracted', 'the after-state is the record at that commit');
+    assert.equal(retract.after.content, '项目使用 pnpm 9');
+
+    const update = changes[1];
+    assert.equal(update.change_type, 'UPDATE');
+    assert.equal(update.before.content, '项目使用 pnpm');
+    assert.equal(update.after.content, '项目使用 pnpm 9');
+
+    const add = changes[2];
+    assert.equal(add.change_type, 'ADD');
+    assert.equal(add.before, null, 'an ADD has nothing before it');
+    assert.equal(add.after.content, '项目使用 pnpm');
+  });
+});
+
+test('a change whose record cannot be read shows null, not a guess', async () => {
+  await withService(async (service) => {
+    await service.add({ content: '项目使用 pnpm', type: 'fact', sourceRefs: REF });
+    const { changes } = await service.recentChanges();
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].after.content, '项目使用 pnpm');
+    assert.equal(changes[0].before, null);
+  });
+});

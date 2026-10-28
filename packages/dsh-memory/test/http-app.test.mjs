@@ -1049,3 +1049,22 @@ test('an accepted candidate writes the entities it inherited', async () => {
     assert.deepEqual(memory.entities, ['pnpm']);
   });
 });
+
+test('the changes route answers with before and after for each change', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+    const memory = await addMemory(app, '项目使用 pnpm');
+    const updated = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId: memory.id, content: '项目使用 pnpm 9', expectedBaseChangeId: memory.last_change_id },
+    });
+    assert.equal(updated.status, 200);
+
+    const listed = await call(app, '/api/dsh-memory/changes');
+    assert.equal(listed.status, 200);
+    const [latest] = listed.json.changes;
+    assert.equal(latest.change_type, 'UPDATE');
+    assert.equal(latest.before.content, '项目使用 pnpm');
+    assert.equal(latest.after.content, '项目使用 pnpm 9');
+  });
+});

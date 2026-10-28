@@ -72,7 +72,7 @@ window.__ModuleLoader__.load({
       objectedDone: '已标记有误：这条记忆会立即退出检索与注入，账本内容不变。', objectFailed: '标记失败，请重试。', reinstateDone: '已恢复使用。',
       policy: '策略', policyAutoAccept: '可自动接受', policyAutoAcceptOff: '可自动接受（自动接受已关闭）', policyReview: '待复核', policyConflict: '冲突待处理', policyNoChange: '无需变化', policyReject: '拒绝写入',
       recentChanges: '最近变更 · Git 留痕（{count} 条）', recentChangesEmpty: '账本还没有提交记录。',
-      recentChangesError: '无法读取账本变更记录。', ledgerHead: '账本 HEAD：{head}',
+      recentChangesError: '无法读取账本变更记录。', ledgerHead: '账本 HEAD：{head}', changeStatus: '{before} → {after}',
       historyEmpty: '没有可显示的版本。', historyVersion: '版本 {version}',
       hostCandidateAccepted: '已接受候选，记忆已写入账本。', hostCandidateRejected: '已拒绝该候选。', hostCandidateFailed: '候选操作未完成：{reason}', hostCandidatesHint: '来自运行时数据库：接受经 Host Writer 写入 Git 账本，拒绝只改变运行时候选状态。',
       hostCandidatesEmpty: 'Host 队列里还没有候选。', hostCandidatesError: '无法读取 Host 候选队列（Host 离线或运行时不可用）。',
@@ -154,7 +154,7 @@ window.__ModuleLoader__.load({
       objectedDone: 'Marked wrong: this memory leaves retrieval and injection now; the ledger is unchanged.', objectFailed: 'Could not record the objection. Try again.', reinstateDone: 'Restored.',
       policy: 'Policy', policyAutoAccept: 'eligible for auto-accept', policyAutoAcceptOff: 'eligible, auto-accept off', policyReview: 'needs review', policyConflict: 'conflict to resolve', policyNoChange: 'no change needed', policyReject: 'rejected by policy',
       recentChanges: 'Recent changes · Git trail ({count})', recentChangesEmpty: 'The ledger has no commits yet.',
-      recentChangesError: 'Could not read the ledger change trail.', ledgerHead: 'Ledger HEAD: {head}',
+      recentChangesError: 'Could not read the ledger change trail.', ledgerHead: 'Ledger HEAD: {head}', changeStatus: '{before} → {after}',
       historyEmpty: 'No versions to show.', historyVersion: 'Version {version}',
       hostCandidateAccepted: 'Candidate accepted; the memory is now in the ledger.', hostCandidateRejected: 'Candidate rejected.', hostCandidateFailed: 'Candidate action failed: {reason}', hostCandidatesHint: 'From the runtime database: accept writes the Git ledger via the Host Writer, reject only changes the runtime status.',
       hostCandidatesEmpty: 'The Host queue has no candidates yet.', hostCandidatesError: 'Could not read the Host candidate queue (Host offline or runtime unavailable).',
@@ -1191,6 +1191,16 @@ window.__ModuleLoader__.load({
       return null;
     }
 
+    /** One record state from a change entry; absent stays null rather than blank. */
+    function recordView(value) {
+      if (value === null || typeof value !== 'object') return null;
+      return {
+        content: typeof value.content === 'string' ? value.content : null,
+        status: typeof value.status === 'string' ? value.status : null,
+        type: typeof value.type === 'string' ? value.type : null,
+      };
+    }
+
     /** Recent-change rows for the Git trail; missing fields stay null. */
     function changeView(data) {
       const list = Array.isArray(data && data.changes) ? data.changes : [];
@@ -1207,6 +1217,8 @@ window.__ModuleLoader__.load({
             reason: typeof source.reason === 'string' ? source.reason : '',
             memoryId: typeof source.memory_id === 'string' ? source.memory_id : null,
             content: typeof source.content === 'string' ? source.content : null,
+            before: recordView(source.before),
+            after: recordView(source.after),
           };
         }),
       };
@@ -1913,6 +1925,17 @@ window.__ModuleLoader__.load({
           setNotice(t('objectFailed'));
         });
       };
+      const changeDiffLine = (row, t) => {
+        const before = row.before;
+        const after = row.after;
+        if (before === null || after === null) return null;
+        const parts = [];
+        if (before.content !== after.content) parts.push((before.content ?? '') + ' → ' + (after.content ?? ''));
+        if (before.status !== after.status) parts.push(t('changeStatus').replace('{before}', String(before.status ?? ''))
+          .replace('{after}', String(after.status ?? '')));
+        if (parts.length === 0) return null;
+        return h('span', { className: 'dm-muted dm-change-diff' }, parts.join(' · '));
+      };
       const ledgerBadges = (values, className) => {
         const { shown, rest } = badgeValues(values);
         if (shown.length === 0) return null;
@@ -2193,7 +2216,8 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'dm-badge dm-badge-' + (row.changeType === 'ADD' ? 'ok' : row.changeType === 'RETRACT' ? 'muted' : 'pending') }, row.changeType === null ? t('notProvided') : row.changeType),
                   h('span', { className: 'dm-muted' }, row.memoryId === null ? t('notProvided') : row.memoryId),
                   row.reason === '' ? null : h('span', { className: 'dm-muted' }, row.reason),
-                  h('span', { className: 'dm-muted dm-changes-time' }, row.committedAt === null ? t('notProvided') : row.committedAt),
+                  changeDiffLine(row, t),
+                h('span', { className: 'dm-muted dm-changes-time' }, row.committedAt === null ? t('notProvided') : row.committedAt),
                   h('span', { className: 'dm-muted dm-changes-commit' }, row.commit === null ? '' : row.commit.slice(0, 7))))))
             : null,
           host.status === 'ok' && shownLedger.length > 0
@@ -2446,6 +2470,7 @@ window.__ModuleLoader__.load({
       .dm-changes-row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--dm-border)}
       .dm-changes-time{margin-left:auto}
       .dm-changes-commit{font-family:var(--dm-mono)}
+.dm-change-diff{flex-basis:100%;font-size:12px;overflow-wrap:anywhere}
       .dm-history{flex:1 1 100%;margin-top:10px;padding:10px 12px;border:1px solid var(--dm-border);border-radius:10px;background:var(--dm-bg-soft)}
       .dm-history-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
       .dm-history-item{padding-bottom:8px;border-bottom:1px solid var(--dm-border)}
