@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
       origin: '来源', originRule: '自动提取', originUser: '用户手动', originLegacy: '旧数据迁移', originLlm: '模型建议',
       sourceKindUserExplicit: '用户明确', sourceKindUserCorrection: '用户纠正', sourceKindSessionExtraction: '会话提取', sourceKindAgentInference: '模型推断',
       decisionNew: '新增', decisionDuplicate: '与现有记忆相同', decisionConflict: '需与现有记忆合并', decisionTarget: '参照 {id}',
+      policy: '策略', policyAutoAccept: '可自动接受', policyAutoAcceptOff: '可自动接受（自动接受已关闭）', policyReview: '待复核', policyConflict: '冲突待处理', policyNoChange: '无需变化', policyReject: '拒绝写入',
       recentChanges: '最近变更 · Git 留痕（{count} 条）', recentChangesEmpty: '账本还没有提交记录。',
       recentChangesError: '无法读取账本变更记录。', ledgerHead: '账本 HEAD：{head}',
       historyEmpty: '没有可显示的版本。', historyVersion: '版本 {version}',
@@ -122,6 +123,7 @@ window.__ModuleLoader__.load({
       origin: 'Origin', originRule: 'auto-extracted', originUser: 'added by user', originLegacy: 'legacy import', originLlm: 'model suggestion',
       sourceKindUserExplicit: 'stated by user', sourceKindUserCorrection: 'user correction', sourceKindSessionExtraction: 'session extraction', sourceKindAgentInference: 'agent inference',
       decisionNew: 'new', decisionDuplicate: 'same as an existing memory', decisionConflict: 'needs merging with an existing memory', decisionTarget: 'refers to {id}',
+      policy: 'Policy', policyAutoAccept: 'eligible for auto-accept', policyAutoAcceptOff: 'eligible, auto-accept off', policyReview: 'needs review', policyConflict: 'conflict to resolve', policyNoChange: 'no change needed', policyReject: 'rejected by policy',
       recentChanges: 'Recent changes · Git trail ({count})', recentChangesEmpty: 'The ledger has no commits yet.',
       recentChangesError: 'Could not read the ledger change trail.', ledgerHead: 'Ledger HEAD: {head}',
       historyEmpty: 'No versions to show.', historyVersion: 'Version {version}',
@@ -1057,6 +1059,18 @@ window.__ModuleLoader__.load({
       return out;
     }
 
+    /** The policy decision in words; unknown or absent stays silent. */
+    function policyLabel(policy, t) {
+      const decision = policy !== null && typeof policy === 'object' && typeof policy.decision === 'string' ? policy.decision : (typeof policy === 'string' ? policy : null);
+      const reasons = policy !== null && typeof policy === 'object' && Array.isArray(policy.reasons) ? policy.reasons : [];
+      if (decision === 'AUTO_ACCEPT') return t('policyAutoAccept');
+      if (decision === 'REVIEW_REQUIRED') return reasons.includes('auto-accept-disabled') ? t('policyAutoAcceptOff') : t('policyReview');
+      if (decision === 'CONFLICT') return t('policyConflict');
+      if (decision === 'NO_CHANGE') return t('policyNoChange');
+      if (decision === 'REJECT') return t('policyReject');
+      return null;
+    }
+
     /** The classifier's answer in words; unknown or absent stays silent. */
     function decisionLabel(decision, t) {
       if (decision === 'ADD') return t('decisionNew');
@@ -1141,6 +1155,9 @@ window.__ModuleLoader__.load({
             reason: typeof source.reason === 'string' ? source.reason : '',
             origin: typeof source.origin === 'string' ? source.origin : null,
             decision: classification && typeof classification.decision === 'string' ? classification.decision : null,
+            policy: candidate && typeof candidate === 'object' && candidate.policy && typeof candidate.policy === 'object'
+              ? { decision: typeof candidate.policy.decision === 'string' ? candidate.policy.decision : null, reasons: Array.isArray(candidate.policy.reasons) ? candidate.policy.reasons.slice(0, 3) : [] }
+              : null,
             decisionTarget: classification && typeof classification.targetId === 'string' ? classification.targetId : null,
             refs: evidenceRefsOf(source),
             createdAt: typeof source.created_at === 'string' ? source.created_at : null,
@@ -1686,6 +1703,8 @@ window.__ModuleLoader__.load({
         originLabel(row.origin, t) === null ? null : h('span', { className: 'dm-badge dm-badge-muted' }, t('origin') + ' · ' + originLabel(row.origin, t)),
         decisionLabel(row.decision, t) === null ? null : h('span', { className: 'dm-badge dm-badge-' + (row.decision === 'ADD' ? 'ok' : row.decision === 'CONFLICT' ? 'pending' : 'muted') },
           decisionLabel(row.decision, t) + (row.decisionTarget === null ? '' : ' · ' + t('decisionTarget').replace('{id}', row.decisionTarget))),
+        policyLabel(row.policy, t) === null ? null : h('span', { className: 'dm-badge dm-badge-' + (row.policy.decision === 'AUTO_ACCEPT' ? 'ok' : row.policy.decision === 'REJECT' ? 'bad' : 'muted') },
+          t('policy') + ' · ' + policyLabel(row.policy, t)),
         ledgerEvidenceButton({ refs: row.refs }, t, openEvidence),
         row.status === 'pending'
           ? h('span', { className: 'dm-host-queue-actions' },
@@ -2117,6 +2136,7 @@ window.__ModuleLoader__.load({
       .dm-badge-info{color:#9dc0ff;border-color:#2b4a7d;background:#16294a}
       .dm-badge-ok{color:#8fe3b4;border-color:#1f5c3c;background:#13251c}
       .dm-badge-pending{color:#f3cf87;border-color:#5c4a1f;background:#241d10}
+.dm-badge-bad{color:#f3a1a1;border-color:#5c2323;background:#2a1414}
       .dm-badge-muted{color:var(--dm-text-mute)}
       .dm-trace-fields{display:grid;grid-template-columns:120px 1fr;gap:6px 14px;margin:10px 0 0;font-size:12px;line-height:18px}
       .dm-trace-fields dt{color:var(--dm-text-mute)}
@@ -2136,6 +2156,7 @@ window.__ModuleLoader__.load({
       hostLine,
       changeView,
       decisionLabel,
+      policyLabel,
       originLabel,
       sourceKindLabel,
       diffLines,

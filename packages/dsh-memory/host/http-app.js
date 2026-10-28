@@ -11,6 +11,7 @@
 import { join } from 'node:path';
 
 import { classifyCandidates } from './classification.js';
+import { evaluateCandidatePolicies } from './policy.js';
 
 import { createLedgerService, toApiError } from './ledger-service.js';
 import { applyMigration, planMemoryMigration } from './migration.js';
@@ -318,7 +319,10 @@ export function createMemoryApp(options = {}) {
         const memories = Array.isArray(state.memories) ? state.memories : [];
         writeJson(res, 200, {
           ok: true,
-          candidates: classifyCandidates(await runtime.listCandidates(), memories),
+          candidates: evaluateCandidatePolicies(
+            classifyCandidates(await runtime.listCandidates(), memories),
+            { autoAccept: false },
+          ),
           summary: await runtime.summary(),
         });
       } catch (error) {

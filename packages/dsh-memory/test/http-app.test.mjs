@@ -501,5 +501,10 @@ test('the queue says whether a candidate is new, identical or conflicting', asyn
     assert.equal(byText.get('项目使用 pnpm').targetId, memoryId);
     assert.equal(byText.get('项目使用 pnpm 管理依赖').decision, 'CONFLICT');
     assert.equal(byText.get('偏好中文回答').decision, 'ADD');
+
+    const byPolicy = new Map(list.json.candidates.map((entry) => [entry.text, entry.policy]));
+    assert.deepEqual(byPolicy.get('项目使用 pnpm'), { decision: 'NO_CHANGE', reasons: ['duplicate'] });
+    assert.deepEqual(byPolicy.get('项目使用 pnpm 管理依赖'), { decision: 'CONFLICT', reasons: ['conflict'] });
+    assert.deepEqual(byPolicy.get('偏好中文回答'), { decision: 'REVIEW_REQUIRED', reasons: ['auto-accept-disabled'] });
   });
 });

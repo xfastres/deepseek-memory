@@ -528,3 +528,24 @@ test('a classified candidate says whether it is new, identical or conflicting', 
   assert.equal(rows[1].decision, null);
   assert.equal(rows[1].decisionTarget, null);
 });
+
+test('the policy decision is named honestly, including "off"', async () => {
+  const { plugin, t } = await load();
+  assert.equal(plugin.policyLabel({ decision: 'AUTO_ACCEPT', reasons: ['eligible'] }, t), '可自动接受');
+  assert.equal(plugin.policyLabel({ decision: 'REVIEW_REQUIRED', reasons: ['auto-accept-disabled'] }, t), '可自动接受（自动接受已关闭）');
+  assert.equal(plugin.policyLabel({ decision: 'REVIEW_REQUIRED', reasons: ['low-confidence'] }, t), '待复核');
+  assert.equal(plugin.policyLabel({ decision: 'CONFLICT', reasons: ['conflict'] }, t), '冲突待处理');
+  assert.equal(plugin.policyLabel({ decision: 'NO_CHANGE', reasons: ['duplicate'] }, t), '无需变化');
+  assert.equal(plugin.policyLabel({ decision: 'REJECT', reasons: ['no-evidence'] }, t), '拒绝写入');
+  assert.equal(plugin.policyLabel(null, t), null);
+  assert.equal(plugin.policyLabel({ decision: 'MAYBE' }, t), null, 'an unknown decision is not translated into a claim');
+
+  const rows = plugin.hostCandidateView({
+    candidates: [
+      { id: 'C-1', text: 'a', policy: { decision: 'REVIEW_REQUIRED', reasons: ['auto-accept-disabled'] } },
+      { id: 'C-2', text: 'b' },
+    ],
+  }).rows;
+  assert.deepEqual(rows[0].policy, { decision: 'REVIEW_REQUIRED', reasons: ['auto-accept-disabled'] });
+  assert.equal(rows[1].policy, null);
+});

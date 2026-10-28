@@ -978,3 +978,11 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 实现：新增纯函数模块 `host/classification.js`——`classifyCandidate(candidate, memories)` 只产出 `ADD`/`NO_CHANGE`/`CONFLICT`（**故意不产出 UPDATE**：更新是用户的合并决定，不能推断），规则为：规范化文本完全相同（且类型相容）→ NO_CHANGE；互相包含或词元 Jaccard ≥ 0.6（类型相容）→ CONFLICT；否则 ADD；非 active 记忆不参与；类型不同视为不同主张，不算重复/冲突；`classifyCandidates` 不改动入参。`GET /candidates` 读取时用当前有效记忆实时计算并附加 `classification`（不落盘、不改数据格式）。界面队列行显示「新增 / 与现有记忆相同 / 需与现有记忆合并 · 参照 M-xx」。
 - 测试：新增 `classification.test.mjs` 7 项（只产出三种取值、重复→NO_CHANGE、包含/重叠→CONFLICT、类型不同→ADD、非 active 不参与、空声明、队列映射不改入参）；`http-app` +1（接受后队列中同文本→NO_CHANGE 且 targetId 为新记忆、近似文本→CONFLICT、不同主题→ADD）；`client-panels` +1（标签映射不编造 UPDATE、缺失分类为 null）；完整套件 **265/265 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主/真实记忆规模下的分类观感与阈值合理性（0.6 只是保守起点，需 5.1 评估集校准）；浏览器视觉。
+
+### 迭代 15（2026-10-28，阶段 4.4：Memory Policy 纯决策，自动接受仍关闭）
+- 依据：`roadmap §7.1` 写入链（证据验证 → 与记忆/未决候选比较 → Policy 决策 AUTO_ACCEPT / REVIEW_REQUIRED / CONFLICT / NO_CHANGE / REJECT → Writer）；`§14 D5/D6`（提取与写入分离、有限自动接受且可关闭）；`§14 D9`（AI 不批准自己的提案）。
+- 缺口：4.3 只回答“与现有记忆的关系”，没有“硬性门槛”判断——证据缺失、类型非法、置信度过低、敏感内容、仅限用户决定的类型（如 `hypothesis`）都没有被显式挡住或分流。
+- 实现：新增纯函数模块 `host/policy.js`——`evaluateCandidatePolicy` 顺序判定：重复→`NO_CHANGE`、冲突→`CONFLICT`（二者先于一切写入考虑）；无证据→`REJECT(no-evidence)`；类型不在 `MEMORY_TYPES`→`REJECT(type-not-allowed)`；敏感→`REVIEW_REQUIRED(sensitive)`；置信度低于阈值（默认 0.6）→`REVIEW_REQUIRED(low-confidence)`；`hypothesis/goal/decision/open_loop/event`→`REVIEW_REQUIRED(type-needs-user)`；类型未知→`REVIEW_REQUIRED(type-unknown)`；合格但自动接受关闭→`REVIEW_REQUIRED(auto-accept-disabled)`；仅当 `autoAccept: true` 且类型属于 `fact/preference/constraint` 才返回 `AUTO_ACCEPT`。`GET /candidates` 以 `{ autoAccept: false }` 附加 `policy`（不落盘、不改变写入行为），界面显示「策略 · 可自动接受（自动接受已关闭）/待复核/冲突待处理/无需变化/拒绝写入」。
+- 刻意不做：不启用自动写入（D9 与 §7.2 的候选状态机 `proposed/validating/review_pending/auto_accepted/...` 尚未实现，运行时候选仍只有 `pending/accepted/rejected`）；该已知缺口如实记录，不在本轮伪装完成。
+- 测试：新增 `policy.test.mjs` 6 项（五种取值、无证据/非法类型、重复/冲突、敏感/低置信/仅用户类型、自动接受关闭与开启、队列标注不改入参）；`http-app` 既有分类用例补 3 条 policy 断言；`client-panels` +1（含 `auto-accept-disabled` 的诚实措辞、未知决策返回 null）；完整套件 **272/272 通过**；`git diff --check` 退出码 0。
+- 未验证：真实候选流上 policy 的实际分流分布（要等 5.1 评估集）；阈值 0.6 与实际置信度来源（extraction 的 confidence 0.6 固定值）是否匹配；浏览器视觉。

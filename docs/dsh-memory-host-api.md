@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 策略决策（实现字段，只读派生）：`GET /candidates` 的每一项还带 `policy: { decision, reasons }`，取值即路线图 §7.1 的五种：`AUTO_ACCEPT` / `REVIEW_REQUIRED` / `CONFLICT` / `NO_CHANGE` / `REJECT`。当前 `AUTO_ACCEPT` 恒不会发生（自动接受开关未实现，合格候选返回 `REVIEW_REQUIRED` + `auto-accept-disabled`），因此该字段只表达“能做什么”，不代表已写入；写入仍只能经用户确认的 `/review`。
+
 > 候选分类（实现字段，只读派生）：`GET /candidates` 的每一项带 `classification: { decision, targetId, reason }`，`decision` 只会是 `ADD`（新）/`NO_CHANGE`（与现有记忆相同）/`CONFLICT`（需合并，绝不静默覆盖）；`reason` 为 `new`/`duplicate`/`included`/`overlap`/`empty`。该字段按读取时的有效记忆实时计算，不写入任何存储。
 
 > 候选来源与正式记忆来源（实现字段，附加、可缺省）：`POST /candidate` 可带 `origin`（`rule` / `user` / `legacy` / `llm`，非法或缺失存为 `null`）；`/state`、`/history`、`/changes` 中的正式记忆带 `source_kind`（`user-explicit` / `user-correction` / `session-extraction` / `agent-inference`）。两者都只描述“这条内容怎么来的”，不改变写入语义。
