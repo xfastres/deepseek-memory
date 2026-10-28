@@ -50,6 +50,7 @@ test('the Host half exposes the ping probe plus the memory routes', () => {
     '/api/dsh-memory/add',
     '/api/dsh-memory/update',
     '/api/dsh-memory/retract',
+    '/api/dsh-memory/migrate',
   ]);
   assert.equal(new Set(paths).size, paths.length, 'route paths must be distinct');
   for (const route of routes) {
@@ -145,7 +146,7 @@ test('apply registers both the route and the tool when services exist', () => {
     effect: (fn) => { fn(); return () => {}; },
   };
   apply({ inject: (_deps, callback) => callback(scoped) });
-  assert.equal(registered.length, 6);
+  assert.equal(registered.length, 7);
   assert.equal(registered[0].path, PING_PATH);
   assert.equal(tooled.length, 1);
   assert.equal(tooled[0].name, 'dsh_memory_ping');
@@ -162,6 +163,6 @@ test('apply never throws and registers the route once a web server exists', () =
 
   const scoped = { get: (name) => (name === 'webServer' ? webServer : undefined), effect: (fn) => { fn(); return () => {}; } };
   apply({ inject: (_deps, callback) => callback(scoped) });
-  assert.equal(registered.length, 6);
+  assert.equal(registered.length, 7);
   assert.equal(registered[0].path, PING_PATH);
 });

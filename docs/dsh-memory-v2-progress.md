@@ -185,6 +185,41 @@ interface WebRoute {
 - 账本服务 8，约 13 秒
 - **合计 74 项全部通过**
 
+## 阶段 2.5 迁移（Host 侧完成）
+
+`packages/dsh-memory/host/migration.js` + 路由 `POST /api/dsh-memory/migrate`。
+
+迁移分两步，都不静默丢弃任何东西：
+
+**plan**（规划）——对每条本地记忆：
+
+| 情况 | 处理 |
+|---|---|
+| 能解析出真实证据 | 生成 ADD 提案，`idempotency_key = migrate:<id>@<version>` |
+| 证据解析不出来 | 跳过，原因 `no-evidence`，**留在浏览器里** |
+| 没有 `{session_id, turn}` | 跳过，原因 `no-source` |
+| 内容为空 | 跳过，原因 `empty` |
+| 账本里已有相同内容 | 跳过，原因 `duplicate` |
+| 历史版本（superseded） | 跳过，原因 `history-not-migrated` |
+| 待确认候选 | 延后，原因 `candidate-queue-not-built`（运行时库还没建） |
+
+**apply**（写入）——逐条写账本，一条失败不影响其余，最后报告 `applied / replayed / failed / skipped`。
+
+两个刻意的设计：
+
+1. **解析不出证据就不迁移**，而不是给个 `event_seq: 0` 蒙过去。宁可看到「这条没迁过去，因为找不到来源」，也不要账本第一天就有假证据。
+2. **幂等键固定**，重复点迁移只会 `replayed`，不会写出两条一样的记忆。
+
+7 项测试，其中一项跑真实 Git 账本：写入 2 条 → 提交了 2 次 → 再迁移一次 → `replayed: 2`、账本仍是 2 条。
+
+### 累计测试
+
+- 快套件（客户端 18 + Host 11 + 真实 HTTP 4 + 证据 13 + 检索 12）= 58，约 0.32 秒
+- HTTP 应用 8，约 10.6 秒
+- 迁移 7（含真实 Git），约 3.6 秒
+- 账本服务 8，约 13 秒
+- **合计 81 项全部通过**
+
 ## 下一步
 
-重启 → 看顶部那行状态。显示「已连接」则进入迁移（2.5）；显示「not-mounted」说明 Host 半边没加载，需要排查；显示「forbidden」则需要改成识别桌面壳的认证 Cookie。
+重启 → 看顶部状态行。已连接则调 `/migrate` 把本地记忆搬进账本；之后才切换读写。

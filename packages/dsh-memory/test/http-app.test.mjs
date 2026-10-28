@@ -164,6 +164,49 @@ test('a stale edit is refused with 409 and an unknown memory with 404', async ()
   });
 });
 
+test('migration imports what it can prove and reports what it cannot', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+
+    const migrated = await call(app, '/api/dsh-memory/migrate', {
+      method: 'POST',
+      headers: { ...BROWSER, ...JSON_HEADERS },
+      body: {
+        memories: [
+          { id: 'memory-1', version: 1, status: 'active', content: '有证据的记忆', source: { session_id: 's1', turn: 1 } },
+          { id: 'memory-2', version: 1, status: 'active', content: '找不到证据的记忆', source: { session_id: 's1', turn: 9 } },
+        ],
+        candidates: [{ id: 'candidate-1' }],
+      },
+    });
+    assert.equal(migrated.status, 200);
+    assert.equal(migrated.json.applied, 1);
+    assert.equal(migrated.json.failed, 0);
+    assert.ok(migrated.json.skipped.some((entry) => entry.reason === 'no-evidence'));
+    assert.equal(migrated.json.deferred.candidates, 1);
+
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 1);
+    assert.equal(state.json.memories[0].content, '有证据的记忆');
+    assert.equal(state.json.memories[0].source.event_seq, 2);
+
+    const again = await call(app, '/api/dsh-memory/migrate', {
+      method: 'POST',
+      headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memories: [{ id: 'memory-1', version: 1, status: 'active', content: '有证据的记忆', source: { session_id: 's1', turn: 1 } }] },
+    });
+    assert.equal(again.json.replayed, 0);
+    assert.equal(again.json.applied, 0);
+    assert.ok(again.json.skipped.some((entry) => entry.reason === 'duplicate'));
+  });
+});
+
 test('invalid bodies, wrong methods and retraction behave', async () => {
   await withApp(async (dir) => {
     const app = createMemoryApp({ dataDir: dir });

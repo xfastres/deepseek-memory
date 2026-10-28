@@ -11,6 +11,7 @@
 import { join } from 'node:path';
 
 import { createLedgerService, toApiError } from './ledger-service.js';
+import { applyMigration, planMemoryMigration } from './migration.js';
 import { createEvidenceResolver } from './session-evidence.js';
 
 export const API_PREFIX = '/api/dsh-memory';
@@ -201,6 +202,29 @@ export function createMemoryApp(options = {}) {
           reason: typeof body.reason === 'string' ? body.reason : undefined,
         });
         writeJson(res, 200, { ok: true, ...result });
+      } catch (error) {
+        fail(res, error);
+      }
+    },
+    [`${API_PREFIX}/migrate`]: async (req, res) => {
+      if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      try {
+        const body = await readJsonBody(req);
+        const legacyMemories = Array.isArray(body.memories) ? body.memories : [];
+        const legacyCandidates = Array.isArray(body.candidates) ? body.candidates : [];
+        const state = await service.state();
+        const plan = await planMemoryMigration({
+          legacyMemories,
+          legacyCandidates,
+          existingMemories: state.memories,
+          resolve: evidence === null
+            ? async () => undefined
+            : ({ sessionId, turn }) => evidence.resolve({ sessionId, turn }),
+        });
+        const summary = await applyMigration(service, plan);
+        writeJson(res, 200, { ok: true, ...summary });
       } catch (error) {
         fail(res, error);
       }

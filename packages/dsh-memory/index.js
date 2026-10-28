@@ -30,7 +30,7 @@ export const ROUTE_PREFIX = API_PREFIX;
 export const PING_PATH = `${API_PREFIX}/ping`;
 
 /** Routes served by the memory application, in addition to the ping probe. */
-export const APP_ROUTE_NAMES = Object.freeze(['state', 'export', 'add', 'update', 'retract']);
+export const APP_ROUTE_NAMES = Object.freeze(['state', 'export', 'add', 'update', 'retract', 'migrate']);
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
