@@ -900,3 +900,29 @@ test('every advertised route name has a handler, so a name can never be a promis
     assert.deepEqual(missing, [], 'a name without a handler would be a silent 404');
   });
 });
+
+test('a write whose evidence cannot be found in the log is refused, not stored', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return [{ seq: 1, type: 'turn/start' }, { seq: 2, type: 'user/message' }, { seq: 3, type: 'turn/end' }]; },
+        async readEvent({ seq }) { return { target: { seq, type: seq === 2 ? 'user/message' : 'turn/start', data: { turn: 1, content: [{ type: 'text', text: '记住 pnpm' }] } } }; },
+      },
+    });
+    // Ref points at an event the log does not contain: the verifier refuses it.
+    const refused = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { content: '项目使用 pnpm', sourceRef: { session_id: 's1', event_seq: 99, event_type: 'user/message' } },
+    });
+    assert.equal(refused.status, 422);
+    assert.equal(refused.json.error, 'no-evidence');
+    assert.deepEqual((await call(app, '/api/dsh-memory/state')).json.memories, [], 'nothing was written');
+
+    const accepted = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { content: '项目使用 pnpm', sourceRef: { session_id: 's1', event_seq: 2, event_type: 'user/message' } },
+    });
+    assert.equal(accepted.status, 200);
+  });
+});

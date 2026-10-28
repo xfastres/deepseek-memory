@@ -171,6 +171,19 @@ export function createLedgerService(options = {}) {
   async function apply(proposal) {
     const ready = await open();
     const full = { ...proposal, owner_id: ownerId, actor: 'user', user_confirmed: true };
+    // The provider records the verification result, but writing is the Host's
+    // decision: a ref that no longer verifies must not become a memory
+    // (roadmap 4.1 / 5.1 "不可伪造引用"). Every writer path goes through here,
+    // so checks live in one place rather than in each route.
+    if (typeof verifyEvidence === 'function') {
+      const checked = await verifyEvidence(Array.isArray(full.source_refs) ? full.source_refs : []);
+      if (checked === null || checked === undefined || checked.verified !== true) {
+        const refused = new Error('evidence does not verify against the session log');
+        refused.name = 'EvidenceError';
+        refused.details = checked;
+        throw refused;
+      }
+    }
     // Callers may pass an explicit key for replay safety; otherwise the ledger
     // gets a fresh one. An explicit `undefined` must not shadow the default.
     if (typeof full.idempotency_key !== 'string' || full.idempotency_key === '') {

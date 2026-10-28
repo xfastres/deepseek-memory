@@ -112,11 +112,20 @@ function requiresJson(req) {
 export function createMemoryApp(options = {}) {
   const { dataDir, sessionQuery, now } = options;
   if (typeof dataDir !== 'string' || dataDir === '') throw new Error('dataDir is required');
-  const service = createLedgerService({ root: join(dataDir, 'ledger'), now });
   const runtime = createRuntimeStore({ root: join(dataDir, 'runtime'), now });
   const evidence = sessionQuery && typeof sessionQuery.listEvents === 'function'
     ? createEvidenceResolver({ sessionQuery })
     : null;
+  // Every ledger write re-checks its refs against the Session log (roadmap 5.1):
+  // the resolver proves a turn at write time, and the verifier refuses a ref
+  // whose event is gone, changed type, or no longer hashes to the recorded
+  // quote. Without a session service there is nothing to check against, so the
+  // resolver stays the only guard.
+  const service = createLedgerService({
+    root: join(dataDir, 'ledger'),
+    now,
+    verifyEvidence: evidence === null ? undefined : (refs) => evidence.verify(refs),
+  });
 
   function fail(res, error) {
     const mapped = toApiError(error);

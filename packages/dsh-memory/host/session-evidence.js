@@ -17,6 +17,18 @@ export function quoteDigest(text) {
   return createHash('sha256').update(String(text), 'utf8').digest('hex');
 }
 
+/** The exact user text of one event's data, or '' when it holds none. */
+function eventText(data) {
+  if (data === null || data === undefined) return '';
+  const message = Array.isArray(data.content) ? data : (data.message ?? null);
+  if (message === null || !Array.isArray(message.content)) return '';
+  return message.content
+    .filter((block) => block !== null && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+}
+
 function ordered(records) {
   return [...records].sort((left, right) => left.seq - right.seq);
 }
@@ -62,6 +74,26 @@ export function createEvidenceResolver({ sessionQuery }) {
     return data === undefined ? undefined : data.turn;
   }
 
+  /**
+   * Attach the sha256 of the exact words the ref points at, when the log can
+   * be read. The roadmap asks a memory record to keep the original quote hash
+   * so a later reader can tell whether the evidence still says what it said.
+   * Nothing is invented: no readable text means no hash.
+   */
+  async function withQuote(ref) {
+    if (ref === undefined || ref === null || !canReadEvents) return ref;
+    let data;
+    try {
+      const window = await sessionQuery.readEvent({ sessionId: ref.session_id, seq: ref.event_seq });
+      data = window && window.target ? window.target.data : undefined;
+    } catch {
+      return ref;
+    }
+    const text = eventText(data);
+    if (text === '') return ref;
+    return { ...ref, quote_sha256: quoteDigest(text) };
+  }
+
   return {
     /**
      * Resolve one turn to a provable source ref.
@@ -84,7 +116,7 @@ export function createEvidenceResolver({ sessionQuery }) {
 
       const ordinal = starts[turn - 1];
       if (ordinal !== undefined && await turnOf(sessionId, ordinal.seq) === turn) {
-        return buildSourceRef(records, { sessionId, turn });
+        return withQuote(buildSourceRef(records, { sessionId, turn }));
       }
       for (const start of starts.slice(0, 500)) {
         if (await turnOf(sessionId, start.seq) !== turn) continue;
@@ -94,7 +126,7 @@ export function createEvidenceResolver({ sessionQuery }) {
         if (message === undefined) return undefined;
         const nextStart = starts.find((other) => other.seq > startSeq);
         if (nextStart !== undefined && message.seq > nextStart.seq) return undefined;
-        return { session_id: String(sessionId), event_seq: message.seq, event_type: 'user/message' };
+        return withQuote({ session_id: String(sessionId), event_seq: message.seq, event_type: 'user/message' });
       }
       return undefined;
     },
@@ -120,6 +152,20 @@ export function createEvidenceResolver({ sessionQuery }) {
         if (target === undefined) missing.push({ ...ref, reason: 'event-missing' });
         else if (ref.event_type !== undefined && target.type !== ref.event_type) {
           missing.push({ ...ref, reason: 'event-type-mismatch', actual: target.type });
+        } else if (typeof ref.quote_sha256 === 'string' && canReadEvents) {
+          // The words must still hash to the recorded value; a changed event
+          // means the memory is no longer backed by the evidence it cites.
+          let data;
+          try {
+            const window = await sessionQuery.readEvent({ sessionId: ref.session_id, seq: ref.event_seq });
+            data = window && window.target ? window.target.data : undefined;
+          } catch {
+            missing.push({ ...ref, reason: 'event-unreadable' });
+            continue;
+          }
+          const text = eventText(data);
+          if (text === '') missing.push({ ...ref, reason: 'quote-unreadable' });
+          else if (quoteDigest(text) !== ref.quote_sha256) missing.push({ ...ref, reason: 'quote-mismatch' });
         }
       }
       return missing.length === 0

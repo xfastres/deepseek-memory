@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 证据校验（L0/L1 完整性）：`createMemoryApp` 把 `evidence.verify` 交给 `createLedgerService` 的 `verifyEvidence`；`apply` 在写入前对它重算一次，**证据无法验证就拒绝写入**（`422 no-evidence`），不是只在 change 记录里留一个标记。ref 还携带 `quote_sha256`（该 `user/message` 原文的 SHA-256），校验时事件消失/类型不符/哈希不符都会拒绝。没有 `sessionQuery` 的环境（纯账本单元测试）不做该校验。
+
 > AI 只读搜索（§11 `memory_search`，模型工具，非 HTTP 路由）：`host/search.js` 的 `searchMemories(memories, query, { suppressedIds, type, limit, now, scope })` 复用注入所用的 `eligibility`（仅 active、未过期、内容质量、scope）并额外隐藏用户已异议的记忆，要求词面命中（不靠新近度凑结果），返回 `{ id, type, content, version, score, hits, evidence }`；空查询返回 `reason: 'empty-query'`。**不写账本、不记注入、不返回撤回/被取代/待复核内容**。
 
 > 提案面板（客户端）：`GET /proposals` 的每一行按 `target_memory_id` 与账本行对齐，修改前后用既有 diff 渲染（`before` 只来自账本中用户已看到的内容）；接受非 `add` 提案时客户端带上该记忆当前的 `changeId` 作为 `expectedBaseChangeId`，目标已消失或账本已变化时提示刷新，不静默覆盖。

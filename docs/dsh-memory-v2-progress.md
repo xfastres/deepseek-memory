@@ -1083,3 +1083,23 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 顺带修复真实缺陷：组装规则正则时 `new RegExp(source, 'gu')` 丢掉了源正则的 `i` 标志，英文大小写敏感、几乎不命中；改为 `'giu'`。该缺陷由评测用例暴露，不是靠猜。
 - 测试：`extraction.test` +3（英文指令/偏好/决定按同一形状产出且带 matched；英文疑问/假设被拒、`maybe` 只降置信度；大写英文仍命中，锁定标志位缺陷）；评测 CLI：`cases 24 · expected 15 · extracted 15 · precision 100.0% · recall 100.0% · exact-count 24/24`（改动前 `english-pref` 为 diff，共 1 处偏差）；完整套件 **334/334 通过**；`git diff --check` 退出码 0。
 - 未验证：英文规则只在这 24 条评测集（其中英文 4 条）上校准，真实英文会话的误报率未知；英文缩写（如 `e.g.`）会被分句切开；真实宿主端到端未跑。
+
+### 迭代 26（2026-10-28，L0 验收核实 + 证据完整性闭环）
+- 本轮目标与依据：按 `roadmap §4.1`（L0 保存会话 ID、事件序号、说话方、**原文哈希**；不改写原始会话；证据不可访问时不得伪造引用）与 `§5.1` 核实 L0。核实结论与证据：
+  | L0 要求 | 当前实现 | 证据 | 结论 |
+  |---|---|---|---|
+  | 复用 DSH 原生会话日志 | `ctx.sessionQuery`（`listEvents/readEvent`）经 `session-evidence.js` 解析；Adapter 直接读日志，不复制会话 | `session-evidence.test` 13 项；`http-app` 用假 sessionQuery 的解析/拒绝用例 | 已实现 |
+  | 原始记录只读 | 代码只调用 `listEvents/readEvent`，无任何会话写入 API | `rg 'sessionQuery\\.' host/` 仅两处读取 | 已实现 |
+  | 保存会话 ID / 事件序号 / 说话方 / 原文哈希 | ID 与 seq 有；说话方由 `event_type: 'user/message'` 表达（schema 无独立 `role` 字段）；**原文哈希此前从未写入** | `validateSourceRef` 支持可选 `quote_sha256` 但 `buildSourceRef` 不产生 | 本轮补齐哈希；`role` 字段缺失 → 文档冲突，未改 schema |
+  | 不复制完整会话 | 账本只存记忆正文+ref；运行时只存候选正文；注入记录只存文本摘要 | `runtime-store.js`、`injection-log.js`（`digestOf`） | 已实现 |
+  | 证据不可访问不伪造 | 解析失败返回 `undefined`，`/add`、`/update`、`/migrate` 均拒绝；迁移把此类记录列入 `skipped: no-evidence` | `http-app` `422 no-evidence` 用例；`migration` 的 skip 分支 | 已实现 |
+- 发现并修复的两个真实缺口：
+  1. `createEvidenceResolver` 已经有 `verify(refs)`（13 项测试覆盖）但**从未接线**：`createMemoryApp` 创建 `createLedgerService` 时没传 `verifyEvidence`，Provider 的默认实现是 `acceptAllEvidence`，即写入时的证据校验一直是空转；
+  2. `quote_sha256`（`roadmap 4.1` 明确要求的「原文哈希」）**从未写入 ref**，`quoteDigest` 只有测试在用。
+- 实现：
+  - `session-evidence.js`：新增 `withQuote()`，解析成功后读取该 `user/message` 的 `content` 文本并写入 `quote_sha256`（读不到文本则不加，绝不伪造）；`verify()` 增加哈希比对，事件不可读/文本为空/哈希不符分别给出 `event-unreadable`/`quote-unreadable`/`quote-mismatch`。
+  - `http-app.js`：先建 resolver，再把 `(refs) => evidence.verify(refs)` 传给 `createLedgerService`；无 `sessionQuery` 的环境保持不校验（纯账本单元测试）。
+  - `ledger-service.js`：Provider 只**记录**校验结果、不拦截，因此 Host 在 `apply()` 写入前自行校验，失败抛 `EvidenceError`（`422 no-evidence`）。所有写入路径（HTTP、自动接受、提案接受、迁移）共用这一处，不再各路由分别检查。
+- 测试：`session-evidence.test` +2（解析出的 ref 带原文哈希；原文被改动后校验报 `quote-mismatch`）、并修正 1 处旧断言（解析现在会为取哈希多读一次 message，读数 `[8] → [8, 10]`）；`http-app.test` +1（日志中不存在的事件 seq → `422` 且账本为空；同一 session 的真实 seq 写入成功）；完整套件 **337/337 通过**；`git diff --check` 退出码 0。
+- 文档冲突（未擅自解决）：`roadmap 4.1` 要求 ref 记录「说话方」，`provider-git-ledger` 的 `validateSourceRef` 只有 `event_type`，没有 `role` 字段；当前用 `user/message` 表达说话方。是否新增 `role` 属数据格式决策，记入待确认。
+- 未验证：真实宿主的 `sessionQuery` 返回结构（`readEvent.target.data.content` 是否总是文本块）只在测试夹具中验证；浏览器端到端；会话日志被压缩/清理后历史记忆的校验行为（当前会拒绝写入新变更，但读取旧记忆不受影响）；迁移在真实生产数据上的表现（未操作生产数据）。

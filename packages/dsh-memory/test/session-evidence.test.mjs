@@ -95,8 +95,10 @@ test('a confirmed ordinal resolves to the turn start the log agrees with', async
       async readEvent({ seq }) { read.push(seq); return { target: { seq, type: 'turn/start', data: { turn: seq <= 3 ? 1 : 2 } } }; },
     },
   });
-  assert.equal((await resolver.resolve({ sessionId: 'session-a', turn: 2 })).event_seq, 10);
-  assert.deepEqual(read, [8]);
+  const ref = await resolver.resolve({ sessionId: 'session-a', turn: 2 });
+  assert.equal(ref.event_seq, 10);
+  assert.deepEqual(read, [8, 10], 'the turn start is confirmed, then the message is read for its quote hash');
+  assert.equal(ref.quote_sha256, undefined, 'this event carries no text, so no hash is invented');
 });
 
 test('non-contiguous turn numbers are corrected by reading, not guessed', async () => {
@@ -164,4 +166,50 @@ test('verification reports missing, mismatched and unreadable evidence', async (
 test('a resolver refuses to be built without a usable service', () => {
   assert.throws(() => createEvidenceResolver({}), /listEvents/);
   assert.throws(() => createEvidenceResolver({ sessionQuery: {} }), /listEvents/);
+});
+
+test('a resolved ref carries the hash of the words it points at', async () => {
+  const LOG_ONE = [
+    { seq: 1, type: 'turn/start' },
+    { seq: 2, type: 'user/message' },
+    { seq: 3, type: 'turn/end' },
+  ];
+  const words = '记住：项目使用 pnpm。';
+  const resolver = createEvidenceResolver({
+    sessionQuery: {
+      async listEvents() { return LOG_ONE; },
+      async readEvent({ seq }) {
+        if (seq === 2) return { target: { seq, type: 'user/message', data: { content: [{ type: 'text', text: words }] } } };
+        return { target: { seq, type: 'turn/start', data: { turn: 1 } } };
+      },
+    },
+  });
+  const ref = await resolver.resolve({ sessionId: 'session-a', turn: 1 });
+  assert.equal(ref.event_seq, 2);
+  assert.equal(ref.quote_sha256, quoteDigest(words), 'the stored hash is the sha256 of the exact quote');
+  assert.deepEqual(await resolver.verify([ref]), { verified: true });
+});
+
+test('verification refuses a ref whose quote no longer matches', async () => {
+  const LOG_ONE = [
+    { seq: 1, type: 'turn/start' },
+    { seq: 2, type: 'user/message' },
+    { seq: 3, type: 'turn/end' },
+  ];
+  let words = '记住：项目使用 pnpm。';
+  const resolver = createEvidenceResolver({
+    sessionQuery: {
+      async listEvents() { return LOG_ONE; },
+      async readEvent({ seq }) {
+        if (seq === 2) return { target: { seq, type: 'user/message', data: { content: [{ type: 'text', text: words }] } } };
+        return { target: { seq, type: 'turn/start', data: { turn: 1 } } };
+      },
+    },
+  });
+  const ref = await resolver.resolve({ sessionId: 'session-a', turn: 1 });
+  words = '记住：项目改用 npm。';
+  const result = await resolver.verify([ref]);
+  assert.equal(result.verified, false);
+  assert.equal(result.reason, 'evidence-not-found');
+  assert.equal(result.missing[0].reason, 'quote-mismatch', 'the evidence changed under the memory');
 });
