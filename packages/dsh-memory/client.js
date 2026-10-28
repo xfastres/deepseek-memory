@@ -43,6 +43,10 @@ window.__ModuleLoader__.load({
       ledgerInactive: '已撤回',
       candidateEmpty: '候选内容不能为空。',
       emptyContent: '内容不能为空。',
+      evidence: '原始证据', viewEvidence: '查看原始证据', evidenceLoading: '正在读取原始证据…',
+      evidenceMissing: '这条记忆没有可用的原始证据引用。',
+      evidenceUnavailable: '无法定位原始证据：该会话可能已不可用。',
+      evidenceOutside: '该事件不在可读取的会话历史中。',
       search: '搜索记忆…', filterType: '类型', filterStatus: '状态', filterAll: '全部',
       filterEmpty: '没有匹配这些筛选条件的记忆。', searchClear: '清除搜索',
       traceTitle: '注入追踪（{count}）', traceHint: '只读审计 · 不包含记忆正文 · 展开时才读取',
@@ -91,6 +95,10 @@ window.__ModuleLoader__.load({
       ledgerInactive: 'retracted',
       candidateEmpty: 'The candidate text is empty.',
       emptyContent: 'Content cannot be empty.',
+      evidence: 'Evidence', viewEvidence: 'View evidence', evidenceLoading: 'Reading the original evidence…',
+      evidenceMissing: 'This memory carries no evidence reference.',
+      evidenceUnavailable: 'Could not locate the evidence: that Session may be unavailable.',
+      evidenceOutside: 'That event is not inside the readable Session history.',
       search: 'Search memories…', filterType: 'Type', filterStatus: 'Status', filterAll: 'All',
       filterEmpty: 'No memories match these filters.', searchClear: 'Clear search',
       traceTitle: 'Injection trace ({count})', traceHint: 'Read-only audit · no memory bodies · loaded on expand',
@@ -372,6 +380,51 @@ window.__ModuleLoader__.load({
       return binding.eventSource.getSnapshot().entries
         .filter((entry) => entry && entry.type === 'event' && entry.event)
         .map((entry) => entry.event);
+    }
+
+    /** Evidence pointers the record actually carries; an empty list is a real answer. */
+    function evidenceRefsOf(memory) {
+      const refs = [];
+      const push = (value) => {
+        if (!value || typeof value !== 'object') return;
+        const sessionId = typeof value.session_id === 'string' ? value.session_id : '';
+        const eventSeq = Number.isInteger(value.event_seq) ? value.event_seq : null;
+        if (sessionId === '' || eventSeq === null) return;
+        if (refs.some((ref) => ref.session_id === sessionId && ref.event_seq === eventSeq)) return;
+        refs.push({ session_id: sessionId, event_seq: eventSeq });
+      };
+      for (const ref of Array.isArray(memory && memory.source_refs) ? memory.source_refs : []) push(ref);
+      if (memory) push(memory.source);
+      return refs;
+    }
+
+    /** The turn that owns an event seq, or null when the seq is outside the read window. */
+    function locateTurnForEvent(turns, ref) {
+      if (!Array.isArray(turns) || !ref) return null;
+      return turns.find((turn) => turn && turn.session_id === ref.session_id
+        && Array.isArray(turn.range) && turn.range[0] <= ref.event_seq && ref.event_seq <= turn.range[1]) ?? null;
+    }
+
+    /** Build the same turn shape the today timeline uses, from grouped session events. */
+    function evidenceTurn(sessionId, item) {
+      const preview = userPreview(item);
+      return {
+        id: sessionId + ':' + item.turn,
+        session_id: sessionId,
+        turn: item.turn,
+        range: [item.start_seq, item.end_seq],
+        started_at: item.started_at,
+        status: item.status,
+        messages: conversationMessages(item.events),
+        ...preview,
+      };
+    }
+
+    /** One evidence action per ledger row, or nothing when the row carries no pointer. */
+    function ledgerEvidenceButton(row, t, onEvidence) {
+      return Array.isArray(row && row.refs) && row.refs.length > 0
+        ? h('button', { type: 'button', className: 'dm-link', onClick: () => onEvidence({ source_refs: row.refs }) }, t('viewEvidence'))
+        : null;
     }
 
     async function loadFullHistory(reference, signal, limit = 40) {
@@ -769,7 +822,7 @@ window.__ModuleLoader__.load({
                 h(FormattedText, { text: message.text }))))));
     }
 
-    function MemoryCard({ memory, history, t, onSaved }) {
+    function MemoryCard({ memory, history, t, onSaved, onEvidence }) {
       const [editing, setEditing] = useState(false);
       const [text, setText] = useState('');
       const [error, setError] = useState('');
@@ -808,6 +861,9 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'dm-back', onClick: () => setEditing(false) }, t('cancel'))),
             error ? h('p', { className: 'dm-muted', role: 'alert' }, error) : null)
           : h(FormattedText, { text: memory.content }),
+        evidenceRefsOf(memory).length > 0 && typeof onEvidence === 'function'
+          ? h('div', { className: 'dm-evidence' }, h('button', { type: 'button', className: 'dm-link', onClick: () => onEvidence(memory) }, t('viewEvidence')))
+          : null,
         history.length > 0
           ? h('details', { className: 'dm-history' },
             h('summary', null, t('history').replace('{count}', history.length)),
@@ -897,6 +953,7 @@ window.__ModuleLoader__.load({
           status,
           // Only forwarded when the ledger actually stored it; never invented.
           type: memory && typeof memory.type === 'string' ? memory.type : null,
+          refs: evidenceRefsOf(memory),
           scope: memory && typeof memory.scope === 'string' ? memory.scope : null,
         };
       });
@@ -1117,6 +1174,35 @@ window.__ModuleLoader__.load({
       const [ledger, setLedger] = useState([]);
       const [query, setQuery] = useState('');
       const [typeFilter, setTypeFilter] = useState('');
+      /** Original-evidence branch: idle, loading, ready, missing or unavailable. */
+      const [evidence, setEvidence] = useState({ status: 'idle', turn: null, ref: null });
+      const openEvidence = (memory) => {
+        const refs = evidenceRefsOf(memory);
+        if (refs.length === 0) { setNotice(t('evidenceMissing')); return; }
+        const ref = refs[0];
+        setEvidence({ status: 'loading', turn: null, ref });
+        const controller = new AbortController();
+        const load = async () => {
+          if (!sessions || typeof sessions.retain !== 'function') {
+            setEvidence({ status: 'unavailable', turn: null, ref });
+            return;
+          }
+          let reference;
+          try {
+            reference = sessions.retain(ref.session_id, { source: 'memory-evidence', signal: controller.signal });
+            await reference.ready;
+            await loadFullHistory(reference, controller.signal);
+            const grouped = groupTurns(ref.session_id, sessionEvents(reference.binding));
+            const turn = locateTurnForEvent(grouped.map((item) => evidenceTurn(ref.session_id, item)), ref);
+            setEvidence(turn ? { status: 'ready', turn, ref } : { status: 'missing', turn: null, ref });
+          } catch {
+            setEvidence({ status: 'unavailable', turn: null, ref });
+          } finally {
+            if (reference && typeof reference.release === 'function') reference.release();
+          }
+        };
+        load();
+      };
       const probeHost = () => {
         if (typeof fetch !== 'function') {
           setHost({ status: 'offline', count: 0, head: null, reason: 'no-fetch' });
@@ -1266,6 +1352,14 @@ window.__ModuleLoader__.load({
             ? h('button', { type: 'button', className: 'dm-link', onClick: () => { setQuery(''); setTypeFilter(''); } }, t('searchClear'))
             : null)
         : null;
+      if (evidence.status === 'ready' && evidence.turn) {
+        return h('section', { className: 'dm-page' },
+          h(ConversationView, {
+            turn: evidence.turn, timeZone: data && data.time_zone, t,
+            onBack: () => setEvidence({ status: 'idle', turn: null, ref: null }),
+            onSaved: (next) => { setCandidates(next); setNotice(t('saved')); },
+          }));
+      }
       if (selected) {
         return h('section', { className: 'dm-page' },
           h(ConversationView, {
@@ -1343,12 +1437,23 @@ window.__ModuleLoader__.load({
           host.status === 'ok' && shownLedger.length > 0
             ? h('section', { className: 'dm-ledger' },
               h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(shownLedger.length))),
-              h('ul', { className: 'dm-ledger-list' }, shownLedger.map((row) => h('li', { key: row.id },
+              h('ul', { className: 'dm-ledger-list' }, shownLedger.map((row) => h('li', { key: row.id }, ledgerEvidenceButton(row, t, openEvidence),
                 h('span', { className: `dm-type dm-type-${row.type === 'constraint' ? 'constraint' : 'plain'}` }, row.type === null ? t('notProvided') : row.type),
                 h('span', { className: 'dm-muted' }, `${row.active ? t('ledgerActive') : t('ledgerInactive')} · ${row.text}`)))))
             : null,
           h(InjectionPanel, { t }),
           ping ? h('p', { className: 'dm-muted', role: 'status' }, ping) : null,
+          evidence.status === 'loading'
+            ? h('div', { className: 'dm-loading', role: 'status' },
+              h('p', { className: 'dm-muted dm-loading-text' }, t('evidenceLoading')),
+              h('div', { className: 'dm-skeleton', 'aria-hidden': true }))
+            : null,
+          evidence.status === 'missing' || evidence.status === 'unavailable'
+            ? h('div', { className: 'dm-notice dm-error', role: 'alert' },
+              h('strong', null, evidence.status === 'missing' ? t('evidenceOutside') : t('evidenceUnavailable')),
+              evidence.ref ? h('p', null, evidence.ref.session_id + ' · seq ' + evidence.ref.event_seq) : null,
+              h('button', { type: 'button', className: 'dm-link', onClick: () => setEvidence({ status: 'idle', turn: null, ref: null }) }, t('cancel')))
+            : null,
           state.status === 'error'
             ? h('div', { className: 'dm-notice dm-error', role: 'alert' },
               h('strong', null, t('readError')), h('p', null, state.error))
@@ -1376,6 +1481,7 @@ window.__ModuleLoader__.load({
                       .sort((left, right) => right.version - left.version),
                     t,
                     onSaved: (result) => { setMemories(result.memories); setNotice(t('saved')); },
+                    onEvidence: openEvidence,
                   })))
                 : null,
               candidates.filter((candidate) => candidate.status === 'candidate').length > 0
@@ -1568,6 +1674,8 @@ window.__ModuleLoader__.load({
       .dm-field .dm-input{width:min(280px,70vw)}
       .dm-field select.dm-input{width:auto;min-width:120px}
       .dm-filter-empty{padding:24px 0}
+      .dm-evidence{margin-top:8px}
+      .dm-ledger-list li .dm-link{margin-left:auto}
       .dm-type{display:inline-block;margin-right:10px;padding:1px 8px;border-radius:999px;border:1px solid var(--dm-border-strong);font-size:11px;color:var(--dm-text-dim);white-space:nowrap}
       .dm-type-constraint{color:var(--dm-purple);border-color:#3b2f66;background:#1a1430}
       .dm-ledger-list li{display:flex;align-items:baseline;gap:4px;padding:6px 0;border-bottom:1px solid var(--dm-border)}
@@ -1608,6 +1716,10 @@ window.__ModuleLoader__.load({
       injectionBadges,
       injectionRows,
       injectionView,
+      evidenceRefsOf,
+      locateTurnForEvent,
+      evidenceTurn,
+      ledgerEvidenceButton,
       loadInjections,
       candidateErrorKey,
       candidateSubmitDisabled,

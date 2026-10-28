@@ -891,3 +891,23 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：新增 `emptyContent` 词条与通用 `textSubmitDisabled`（与候选表单共用同一判空规则，避免两套逻辑漂移）；记忆编辑保存失败按 stale/empty/其他分别提示；空内容禁用保存按钮。
 - 测试：`client-panels` +1（10 项，含"同一判空函数"断言），完整套件 238/238 通过，`git diff --check` 退出码 0。
 - 未验证：浏览器端按钮禁用与提示的真实呈现。
+
+## L0–L3 架构现状与差距表（2026-10-28，按仓库既有决策核实）
+
+依据：`docs/dsh-memory-roadmap-v2.md`（§3.1 职责分离、§4 记忆模型、§12 路线图、§14 决策 D1–D12、§16 暂不做）、`docs/dsh-memory-v2-status.md`、实际代码与测试。
+说明：L0 = 原始会话层（只读），L1 = 原子记忆（Git 账本为正式事实源），L2 = 场景记忆，L3 = 长期画像；D11 明确 L2/L3 后置。
+
+| 模块 | 设计要求 | 当前实现 | 证据 | 缺口 | 下一步 |
+|---|---|---|---|---|---|
+| L0 会话证据 | 复用 DSH 原生会话日志作事实源；只读；记忆保存 session_id/event_seq/说话方/原文哈希；证据不可访问时标缺失，不伪造 | Host 侧证据解析已实现并接入写路径；客户端已能查看今日会话/轮次时间线，本轮新增"从记忆（正式/账本）跳到该事件所属轮次"的原始证据视图 | `host/session-evidence.js`（createEvidenceResolver）、`host/http-app.js`（resolve → 422 no-evidence）、`test/session-evidence.test.mjs`（4 项）、`test/host.test.mjs`（候选必有可证证据）、`client.js`（readToday / groupTurns / 本轮 evidenceRefsOf / locateTurnForEvent / evidenceTurn + 4 项测试） | 证据视图停在"该轮"而不是高亮命中 seq；真实宿主未点击验证 | 下一轮：高亮命中事件或补真实宿主验收记录 |
+| L1 原子记忆 | 类型/状态/证据/来源/版本；只经 Writer 写入；Git 每次正式变更留痕 | 已实现：schema 校验、版本冲突、superseded/retracted、类型枚举、证据必填 | `host/ledger-service.js`、`host/runtime-store.js`、`test/ledger-service.test.mjs`、`test/http-app.test.mjs`、`test/robustness.test.mjs` | UI 未展示 evidence 的角色与 quote 哈希（只显示定位按钮）；`source_kind/confidence` 未在 UI 暴露 | 视需要补只读展示 |
+| L2 场景记忆 | 引用 L1 ID 组织场景，不自动生成 | 纯函数已实现并有测试；无路由、无 UI | `scenarios.js`、`test/scenarios.test.mjs`（4 项）；`grep` 显示 host/http-app/client 均未引用 | 未接线（符合 D11 后置） | 阶段 4.8 再做 |
+| L3 长期画像 | 仅从有效 L1/L2 推导、可回溯、支撑失效转 review_pending、不伪装原话 | 纯函数已实现并有测试；无路由/UI；`PERSONA_TYPES` 含 `instruction`，而账本合法类型不含 instruction（待核实是历史残留还是设计缺口） | `persona.js`（PERSONA_TYPES/buildPersona/personaVersion/personaFresh）、`test/persona.test.mjs`（4 项） | 未接线 + 类型集合与 schema 存在出入（按规则先记录，不擅自改契约） | 阶段 4.9 前先澄清 |
+| 受控写入与 Git 审计 | 单一 MemoryWriter；每次正式变更一个 Git 提交；撤回保留历史；用户与 AI 修改同走 Writer | 已实现：ledger-service 串行 mutate + 锁 + provider-git-ledger 提交；`/add /update /retract /review /migrate` 均经 service | `host/ledger-service.js`（mutate/lock）、`host/http-app.js` 路由表、`test/host-http.test.mjs`、`test/ledger-service.test.mjs` | 跨进程文件锁未在真实多进程下验证 | 保持；作为已知未验证项 |
+| UI 与记忆流程 | 区分原始证据/候选/正式；从记忆定位证据；按钮行为真实 | 候选/正式/账本分区已存在；本轮新增证据定位（有引用才显示按钮，无引用只提示"没有可用的原始证据引用"，不伪造） | 本轮 `client.js` + `test/client-panels.test.mjs` 4 项 | 浏览器视觉与点击路径未验证 | 下一轮 |
+
+### 迭代 5（2026-10-28，L0 缺口：从记忆定位原始证据）
+- 依据：`docs/dsh-memory-roadmap-v2.md` §4.1 要求"记忆记录保存会话 ID、事件序号"，§12 阶段 3.5/3.6 要求"能按会话/轮次查看具体记忆与版本"；但此前 UI 未暴露证据引用。
+- 改动：`client.js` 新增 `evidenceRefsOf` / `locateTurnForEvent` / `evidenceTurn` / `ledgerEvidenceButton`；正式记忆卡与账本行在**确有 source_refs/source** 时显示"查看原始证据"，点击后经 `sessions.retain` 读取真实会话事件并复用 `ConversationView` 展示该轮；无引用、事件不在窗口、会话不可用三种情况分别给出不同提示，不伪造引用。
+- 测试：`client-panels` 新增 4 项（引用归一化与去重、seq 归属轮次、从会话事件重建轮次、账本行 refs 与按钮条件）；完整套件 **242/242 通过**；`git diff --check` 退出码 0。
+- 未验证：浏览器真实点击与视觉；真实宿主上旧会话（非今日）能否 retain 并读取；未对生产数据做任何写入。

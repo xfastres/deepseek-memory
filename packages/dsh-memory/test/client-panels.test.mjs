@@ -203,3 +203,71 @@ test('the memory editor rejects blank content with an accurate message', async (
   assert.throws(() => plugin.editMemory('M-x', '   ', 1), /empty/u);
   assert.equal(t('emptyContent'), '内容不能为空。');
 });
+
+test('a memory exposes exactly the evidence references it really carries', async () => {
+  const { plugin } = await load();
+  const refs = plugin.evidenceRefsOf({
+    id: 'M-1',
+    source_refs: [
+      { session_id: 'session-a', event_seq: 12 },
+      { session_id: 'session-a', event_seq: 12 },
+      { session_id: 'session-a' },
+      { event_seq: 13 },
+      null,
+    ],
+    source: { session_id: 'session-b', event_seq: 40 },
+  });
+  assert.deepEqual(refs, [
+    { session_id: 'session-a', event_seq: 12 },
+    { session_id: 'session-b', event_seq: 40 },
+  ]);
+  assert.deepEqual(plugin.evidenceRefsOf({ id: 'M-2' }), [], 'no reference is a real answer');
+  assert.deepEqual(plugin.evidenceRefsOf(null), []);
+});
+
+test('an event seq is located only inside the turn that owns it', async () => {
+  const { plugin } = await load();
+  const turns = [
+    { id: 's:1', session_id: 's', range: [1, 9] },
+    { id: 's:2', session_id: 's', range: [10, 20] },
+  ];
+  assert.equal(plugin.locateTurnForEvent(turns, { session_id: 's', event_seq: 12 }).id, 's:2');
+  assert.equal(plugin.locateTurnForEvent(turns, { session_id: 's', event_seq: 21 }), null);
+  assert.equal(plugin.locateTurnForEvent(turns, { session_id: 'other', event_seq: 12 }), null);
+  assert.equal(plugin.locateTurnForEvent([], { session_id: 's', event_seq: 1 }), null);
+  assert.equal(plugin.locateTurnForEvent(null, null), null);
+});
+
+test('the evidence view rebuilds a real turn from session events', async () => {
+  const { plugin } = await load();
+  const item = {
+    session_id: 'session-a', turn: 7, start_seq: 10, end_seq: 14, started_at: 1700000000000, status: 'completed',
+    events: [
+      { type: 'user/message', seq: 11, time: 1700000000000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '记住我喜欢简洁的回答' }] } },
+      { type: 'assistant/message', seq: 12, time: 1700000000001, data: { message: { content: [{ type: 'text', text: '好的。' }] } } },
+    ],
+  };
+  const turn = plugin.evidenceTurn('session-a', item);
+  assert.equal(turn.id, 'session-a:7');
+  assert.equal(turn.turn, 7);
+  assert.deepEqual(turn.range, [10, 14]);
+  assert.equal(turn.messages.length, 2);
+  assert.deepEqual(turn.source_refs, [{ session_id: 'session-a', event_seq: 11 }]);
+  assert.match(turn.text, /简洁/u);
+});
+
+test('ledger rows carry their evidence and offer an action only when they have one', async () => {
+  const { plugin, t } = await load();
+  const rows = plugin.ledgerView([
+    { id: 'M-1', status: 'active', content: '用 pnpm', type: 'fact', source_refs: [{ session_id: 's', event_seq: 3 }] },
+    { id: 'M-2', status: 'active', content: '无引用', type: 'fact' },
+  ]);
+  assert.equal(rows[0].refs.length, 1);
+  assert.equal(rows[1].refs.length, 0);
+  const called = [];
+  const button = plugin.ledgerEvidenceButton(rows[0], t, (memory) => called.push(memory));
+  assert.equal(button.props.className, 'dm-link');
+  button.props.onClick();
+  assert.equal(called[0].source_refs[0].event_seq, 3);
+  assert.equal(plugin.ledgerEvidenceButton(rows[1], t, () => {}), null);
+});
