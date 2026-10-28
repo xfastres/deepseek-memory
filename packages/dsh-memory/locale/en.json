@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "title": "Working memory",
+    "description": "A timeline of real interactions with your AI, grounded in Session evidence."
+  },
+  "memory": {
+    "panel": "Memory",
+    "title": "Working memory",
+    "intro": "Today's interactions with your AI, with original text and sources.",
+    "refresh": "Refresh",
+    "loading": "Reading today's interactions…",
+    "empty": "No interactions to show today.",
+    "emptyHint": "New turns will appear here in time order.",
+    "turn": "Turn {turn}",
+    "completed": "Completed",
+    "closed_incomplete": "Incomplete",
+    "in_progress": "In progress",
+    "readError": "Could not read working memory.",
+    "warnings": "Some Sessions could not be read.",
+    "retry": "Retry",
+    "localOnly": "Read-only · No AI summaries"
+  }
+}

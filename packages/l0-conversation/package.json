@@ -1,0 +1,14 @@
+{
+  "name": "@dsh-memory/l0-conversation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./today": "./src/today.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "verify:live": "node scripts/verify-live.mjs"
+  }
+}

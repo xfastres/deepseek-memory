@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>Working memory</title>
+  <path d="M18 13h28a7 7 0 0 1 7 7v22a7 7 0 0 1-7 7H34L21 58v-9h-3a7 7 0 0 1-7-7V20a7 7 0 0 1 7-7Z" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M22 26h20M22 35h12" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="46" cy="45" r="10" fill="currentColor"/>
+  <path d="M46 39v6l4 2" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "title": "工作记忆",
+    "description": "按时间查看你与 AI 的真实交互，保留可核对的会话来源。"
+  },
+  "memory": {
+    "panel": "记忆",
+    "title": "工作记忆",
+    "intro": "今天你与 AI 的交互，保留真实原文与来源。",
+    "refresh": "刷新",
+    "loading": "正在读取今天的交互…",
+    "empty": "今天还没有可显示的交互。",
+    "emptyHint": "新的轮次出现后，可以在这里按时间查看。",
+    "turn": "第 {turn} 轮",
+    "completed": "已完成",
+    "closed_incomplete": "未正常完成",
+    "in_progress": "进行中",
+    "readError": "无法读取工作记忆。",
+    "warnings": "部分会话暂时无法读取。",
+    "retry": "重试",
+    "localOnly": "只读视图 · 不生成 AI 摘要"
+  }
+}
