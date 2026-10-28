@@ -924,3 +924,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：`createHostClient` 增加 `update`/`retract`（可选字段缺省时**不发送**，不发 null）；`ledgerView` 透传 `last_change_id` 与 `version`（缺失保持 null，不伪造）；账本行新增编辑表单与两步确认撤回；失败按 stale/busy/missing 分别提示，成功后 `probeHost()` 重读 `/state`，本地不写任何存储。
 - 测试：`client-panels` +2（17 项，覆盖路径/方法/Content-Type/请求体、可选字段缺省、409 stale 与 403 forbidden 映射、changeId/version 透传）；完整套件 **245/245 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主点击路径与浏览器视觉；账本并发写入的跨进程锁仍未验证；未对生产数据做任何写入。
+
+### 迭代 8（2026-10-28，L1 / 阶段 2.4：Host 运行时候选队列可见，客户端契约补齐）
+- 依据：roadmap 阶段 2.4"界面操作统一走 Host API"、§3.1"SQLite 运行时库存放候选队列"、决策 D3/D5；此前 Host 已有 `/candidates`（GET）、`/candidate`、`/review`（POST），但客户端既无方法也无展示，本地候选与宿主队列两套数据完全不可见彼此。
+- 契约核对（未新增路由、未改字段）：GET `/candidates` → `{ok, candidates, summary}`；POST `/candidate` → `{ok, candidate}`，无证据返回 422 no-evidence；POST `/review` 支持 `reject/accept/merge`，merge 需要 `targetId`，stale→409。运行时候选字段：`id, text, type, status(pending|accepted|rejected), session_id, turn, source_refs, confidence, reason, created_at`。
+- 改动：`createHostClient` 增加 `candidates()` / `candidate()` / `review()`（只为后续把评审切到 Writer 做准备，本轮**不改变**任何评审行为）；新增 `hostCandidateView` 归一化（缺字段保持 null/空串，不伪造）；Host 在线时展示"Host 候选队列（只读）"，明确标注"评审动作仍写入本地存储"，并提供与队列条目对应的原始证据入口；Host 离线时给出可理解提示。
+- 测试：`client-panels` +1（18 项，覆盖 GET 路径、POST 路径/方法/请求体、stale 映射、队列归一化与空输入）；完整套件 **246/246 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上队列内容与界面渲染；浏览器视觉；跨进程锁；对生产数据零写入。

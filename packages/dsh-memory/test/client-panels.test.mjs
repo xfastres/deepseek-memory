@@ -322,3 +322,50 @@ test('ledger rows keep the change id and version the writer needs', async () => 
   assert.equal(bare[0].changeId, null);
   assert.equal(bare[0].version, null);
 });
+
+test('the host candidate contract is read and written without inventing fields', async () => {
+  const { plugin } = await load();
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true, status: 200,
+      text: async () => JSON.stringify({
+        ok: true,
+        candidates: [{ id: 'C-1', text: '用 pnpm', type: 'fact', status: 'pending', reason: 'explicit', source_refs: [{ session_id: 's', event_seq: 4 }] }],
+        summary: { pending: 1 },
+      }),
+    };
+  };
+  const client = plugin.createHostClient(fetchImpl);
+  const queue = await client.candidates();
+  assert.equal(calls[0].url, 'api/dsh-memory/candidates');
+  assert.equal(calls[0].init.method, undefined, 'a read is a plain GET');
+  assert.equal(queue.candidates.length, 1);
+  assert.deepEqual(queue.summary, { pending: 1 });
+
+  const view = plugin.hostCandidateView(queue);
+  assert.equal(view.rows[0].type, 'fact');
+  assert.equal(view.rows[0].status, 'pending');
+  assert.deepEqual(view.rows[0].refs, [{ session_id: 's', event_seq: 4 }]);
+  assert.deepEqual(view.rows[0].reason, 'explicit');
+
+  const bare = plugin.hostCandidateView({ candidates: [{ id: 'C-2' }] });
+  assert.equal(bare.rows[0].type, null);
+  assert.equal(bare.rows[0].status, null);
+  assert.equal(bare.rows[0].reason, '');
+  assert.equal(bare.rows[0].refs.length, 0);
+  assert.deepEqual(plugin.hostCandidateView(null), { summary: null, rows: [] });
+
+  await client.candidate({ text: '记住这一点', sessionId: 's', turn: 3 });
+  assert.equal(calls[1].url, 'api/dsh-memory/candidate');
+  assert.equal(calls[1].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[1].init.body), { text: '记住这一点', sessionId: 's', turn: 3 });
+
+  await client.review({ candidateId: 'C-1', action: 'accept', content: '用 pnpm 管理依赖' });
+  assert.equal(calls[2].url, 'api/dsh-memory/review');
+  assert.deepEqual(JSON.parse(calls[2].init.body), { candidateId: 'C-1', action: 'accept', content: '用 pnpm 管理依赖' });
+
+  const stale = plugin.createHostClient(async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ ok: false, error: 'stale' }) }));
+  await assert.rejects(() => stale.review({ candidateId: 'C-1', action: 'merge', targetId: 'M-1', content: 'x' }), (error) => error.reason === 'stale');
+});

@@ -51,6 +51,8 @@ window.__ModuleLoader__.load({
       retract: '撤回', confirmRetract: '确认撤回', retracted: '已撤回，历史版本仍保留。',
       retractFailed: '撤回未完成：{reason}', versionChanged: '账本已变化，请刷新后重试。',
       hostBusy: '账本正在写入，请稍后重试。', missingMemory: '这条记忆在账本中已不存在。',
+      hostCandidates: 'Host 候选队列（{count}）', hostCandidatesHint: '只读 · 来自运行时数据库；此处的评审动作仍写入本地存储。',
+      hostCandidatesEmpty: 'Host 队列里还没有候选。', hostCandidatesError: '无法读取 Host 候选队列（Host 离线或运行时不可用）。',
       search: '搜索记忆…', filterType: '类型', filterStatus: '状态', filterAll: '全部',
       filterEmpty: '没有匹配这些筛选条件的记忆。', searchClear: '清除搜索',
       traceTitle: '注入追踪（{count}）', traceHint: '只读审计 · 不包含记忆正文 · 展开时才读取',
@@ -107,6 +109,8 @@ window.__ModuleLoader__.load({
       retract: 'Retract', confirmRetract: 'Confirm retraction', retracted: 'Retracted; history is still kept.',
       retractFailed: 'Retraction failed: {reason}', versionChanged: 'The ledger changed; refresh and retry.',
       hostBusy: 'The ledger is writing; retry in a moment.', missingMemory: 'This memory no longer exists in the ledger.',
+      hostCandidates: 'Host candidate queue ({count})', hostCandidatesHint: 'Read-only · from the runtime database; reviews here still write to local storage.',
+      hostCandidatesEmpty: 'The Host queue has no candidates yet.', hostCandidatesError: 'Could not read the Host candidate queue (Host offline or runtime unavailable).',
       search: 'Search memories…', filterType: 'Type', filterStatus: 'Status', filterAll: 'All',
       filterEmpty: 'No memories match these filters.', searchClear: 'Clear search',
       traceTitle: 'Injection trace ({count})', traceHint: 'Read-only audit · no memory bodies · loaded on expand',
@@ -969,6 +973,42 @@ window.__ModuleLoader__.load({
           if (typeof reason === 'string' && reason !== '') body.reason = reason;
           return post('/retract', body);
         },
+        /** Read the runtime candidate queue; this never mutates anything. */
+        async candidates() {
+          const data = await get('/candidates');
+          return {
+            candidates: Array.isArray(data.candidates) ? data.candidates : [],
+            summary: data.summary && typeof data.summary === 'object' ? data.summary : null,
+          };
+        },
+        /** Queue a candidate. Evidence resolution stays on the Host. */
+        async candidate(payload) {
+          return post('/candidate', payload);
+        },
+        /** Reject, accept or merge a Host candidate through the single writer. */
+        async review(payload) {
+          return post('/review', payload);
+        },
+      };
+    }
+
+    /** Runtime queue rows; a missing field stays null instead of being invented. */
+    function hostCandidateView(data, limit = 20) {
+      const list = data && Array.isArray(data.candidates) ? data.candidates.slice(0, limit) : [];
+      return {
+        summary: data && data.summary && typeof data.summary === 'object' ? data.summary : null,
+        rows: list.map((candidate) => {
+          const source = candidate && typeof candidate === 'object' ? candidate : {};
+          return {
+            id: typeof source.id === 'string' ? source.id : '',
+            text: typeof source.text === 'string' ? source.text : '',
+            type: typeof source.type === 'string' ? source.type : null,
+            status: typeof source.status === 'string' ? source.status : null,
+            reason: typeof source.reason === 'string' ? source.reason : '',
+            refs: evidenceRefsOf(source),
+            createdAt: typeof source.created_at === 'string' ? source.created_at : null,
+          };
+        }),
       };
     }
 
@@ -1205,6 +1245,8 @@ window.__ModuleLoader__.load({
       const [host, setHost] = useState({ status: 'probing', count: 0, head: null, reason: '' });
       /** Ledger contents read from the Host, shown read-only beside the local store. */
       const [ledger, setLedger] = useState([]);
+      /** Host runtime candidate queue: read-only here until reviews move to the Writer. */
+      const [hostQueue, setHostQueue] = useState({ status: 'idle', rows: [], error: null });
       const [query, setQuery] = useState('');
       const [typeFilter, setTypeFilter] = useState('');
       /** Original-evidence branch: idle, loading, ready, missing or unavailable. */
@@ -1245,9 +1287,14 @@ window.__ModuleLoader__.load({
         createHostClient(fetch).state().then((data) => {
           setHost({ status: 'ok', count: data.memories.length, head: data.head, reason: '' });
           setLedger(data.memories);
+          createHostClient(fetch).candidates().then((queue) => {
+            const view = hostCandidateView(queue);
+            setHostQueue({ status: 'ready', rows: view.rows, error: null });
+          }, () => setHostQueue({ status: 'error', rows: [], error: 'network' }));
         }, (error) => {
           setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
           setLedger([]);
+          setHostQueue({ status: 'idle', rows: [], error: null });
         });
       };
       useEffect(() => { probeHost(); }, []);
@@ -1536,6 +1583,22 @@ window.__ModuleLoader__.load({
           host.status === 'ok' && memories.length > 0
             ? h('button', { type: 'button', className: 'dm-refresh', disabled: migrating, onClick: migrateToHost }, t('migrateButton').replace('{count}', String(memories.length)))
             : null,
+          host.status === 'ok' && hostQueue.status === 'error'
+            ? h('p', { className: 'dm-muted', role: 'alert' }, t('hostCandidatesError'))
+            : null,
+          host.status === 'ok' && hostQueue.status === 'ready'
+            ? h('section', { className: 'dm-host-queue' },
+              h('p', { className: 'dm-muted' }, t('hostCandidates').replace('{count}', String(hostQueue.rows.length))),
+              h('p', { className: 'dm-muted' }, t('hostCandidatesHint')),
+              hostQueue.rows.length === 0
+                ? h('p', { className: 'dm-muted' }, t('hostCandidatesEmpty'))
+                : h('ul', { className: 'dm-host-queue-list' }, hostQueue.rows.map((row) => h('li', { key: row.id, className: 'dm-host-queue-row' },
+                  h('span', { className: 'dm-type dm-type-' + (row.type === 'constraint' ? 'constraint' : 'plain') }, row.type === null ? t('notProvided') : row.type),
+                  h('span', { className: 'dm-badge dm-badge-' + (row.status === 'pending' ? 'pending' : row.status === 'accepted' ? 'ok' : 'muted') }, row.status === null ? t('notProvided') : row.status),
+                  h('span', { className: 'dm-muted' }, row.text),
+                  row.reason === '' ? null : h('span', { className: 'dm-muted' }, row.reason),
+                  ledgerEvidenceButton({ refs: row.refs }, t, openEvidence)))))
+            : null,
           host.status === 'ok' && shownLedger.length > 0
             ? h('section', { className: 'dm-ledger' },
               h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(shownLedger.length))),
@@ -1777,6 +1840,9 @@ window.__ModuleLoader__.load({
       .dm-evidence{margin-top:8px}
       .dm-evidence-located{margin:10px 0 0}
       .dm-message-hit{outline:2px solid var(--dm-accent);outline-offset:2px}
+      .dm-host-queue{margin:20px 0 0;padding:14px 16px;border:1px solid var(--dm-border);border-radius:12px;background:var(--dm-bg-soft)}
+      .dm-host-queue-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+      .dm-host-queue-row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--dm-border)}
       .dm-ledger-row{flex-wrap:wrap}
       .dm-ledger-line{display:flex;gap:10px;align-items:baseline;min-width:0;flex:1 1 auto}
       .dm-ledger-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-left:auto}
@@ -1817,6 +1883,7 @@ window.__ModuleLoader__.load({
       reviewView,
       createHostClient,
       hostLine,
+      hostCandidateView,
       ledgerView,
       filterMemories,
       memoryTypes,
