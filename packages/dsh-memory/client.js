@@ -42,6 +42,7 @@ window.__ModuleLoader__.load({
       ledgerActive: '已生效',
       ledgerInactive: '已撤回',
       candidateEmpty: '候选内容不能为空。',
+      emptyContent: '内容不能为空。',
       search: '搜索记忆…', filterType: '类型', filterStatus: '状态', filterAll: '全部',
       filterEmpty: '没有匹配这些筛选条件的记忆。', searchClear: '清除搜索',
       traceTitle: '注入追踪（{count}）', traceHint: '只读审计 · 不包含记忆正文 · 展开时才读取',
@@ -89,6 +90,7 @@ window.__ModuleLoader__.load({
       ledgerActive: 'active',
       ledgerInactive: 'retracted',
       candidateEmpty: 'The candidate text is empty.',
+      emptyContent: 'Content cannot be empty.',
       search: 'Search memories…', filterType: 'Type', filterStatus: 'Status', filterAll: 'All',
       filterEmpty: 'No memories match these filters.', searchClear: 'Clear search',
       traceTitle: 'Injection trace ({count})', traceHint: 'Read-only audit · no memory bodies · loaded on expand',
@@ -653,6 +655,9 @@ window.__ModuleLoader__.load({
       return String(text ?? '').trim() === '';
     }
 
+    /** The memory editor saves one text field too, so it shares the same guard. */
+    const textSubmitDisabled = candidateSubmitDisabled;
+
     function saveCandidate(turn, text) {
       if (turn.status !== 'completed') throw new Error('incomplete');
       const trimmed = text.trim();
@@ -787,7 +792,8 @@ window.__ModuleLoader__.load({
                 onSaved(editMemory(memory.id, text, memory.version));
                 setEditing(false);
               } catch (thrown) {
-                setError(thrown && thrown.message === 'stale' ? t('stale') : t('saveFailed'));
+                const reason = thrown && thrown.message;
+                setError(reason === 'stale' ? t('stale') : reason === 'empty' ? t('emptyContent') : t('saveFailed'));
               }
             },
           },
@@ -798,7 +804,7 @@ window.__ModuleLoader__.load({
               onChange: (event) => setText(event.target.value),
             }),
             h('div', { className: 'dm-review-actions' },
-              h('button', { type: 'submit', className: 'dm-refresh' }, t('saveEdit')),
+              h('button', { type: 'submit', className: 'dm-refresh', disabled: textSubmitDisabled(text) }, t('saveEdit')),
               h('button', { type: 'button', className: 'dm-back', onClick: () => setEditing(false) }, t('cancel'))),
             error ? h('p', { className: 'dm-muted', role: 'alert' }, error) : null)
           : h(FormattedText, { text: memory.content }),
@@ -1605,6 +1611,7 @@ window.__ModuleLoader__.load({
       loadInjections,
       candidateErrorKey,
       candidateSubmitDisabled,
+      textSubmitDisabled,
       migrationSummary,
       mergeDraft,
       editMemory,

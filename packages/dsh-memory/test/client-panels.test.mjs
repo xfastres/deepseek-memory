@@ -193,3 +193,13 @@ test('a blank candidate is blocked early and gets its own message', async () => 
   assert.equal(plugin.candidateErrorKey({ message: 'incomplete' }), 'onlyCompleted');
   assert.equal(plugin.candidateErrorKey(null), 'onlyCompleted');
 });
+
+test('the memory editor rejects blank content with an accurate message', async () => {
+  const { plugin, t } = await load();
+  assert.equal(plugin.textSubmitDisabled('   '), true);
+  assert.equal(plugin.textSubmitDisabled('保留这一条'), false);
+  assert.equal(plugin.textSubmitDisabled, plugin.candidateSubmitDisabled, 'one guard, no divergence');
+
+  assert.throws(() => plugin.editMemory('M-x', '   ', 1), /empty/u);
+  assert.equal(t('emptyContent'), '内容不能为空。');
+});
