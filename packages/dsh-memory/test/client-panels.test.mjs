@@ -137,9 +137,46 @@ test('the console theme and trace layout are part of the stylesheet', async () =
   const { css } = await load();
   for (const rule of [
     '--dm-bg:#0b1220', '--dm-accent:#4f8cff', 'background:var(--dm-bg)',
-    '.dm-toolbar{', '.dm-trace{', '.dm-badge-info', '.dm-type-constraint',
+    '.dm-toolbar{', '.dm-trace{', '.dm-trace-actions{', '.dm-badge-info', '.dm-type-constraint',
     'grid-template-columns:120px 1fr', '@media(max-width:720px)',
   ]) {
     assert.ok(css.includes(rule), `stylesheet is missing ${rule}`);
+  }
+});
+
+test('a failed audit read stays retryable instead of throwing', async () => {
+  const { plugin } = await load();
+  const ok = await plugin.loadInjections(async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ ok: true, injections: [{ turn: 1 }] }),
+  }));
+  assert.equal(ok.status, 'ready');
+  assert.equal(ok.records.length, 1);
+
+  const httpError = await plugin.loadInjections(async () => ({ ok: false, status: 500, text: async () => 'boom' }));
+  assert.deepEqual(httpError, { status: 'error', records: [], error: 'http-500' });
+
+  const notOk = await plugin.loadInjections(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: false }) }));
+  assert.equal(notOk.status, 'error');
+  assert.equal(notOk.error, 'http-200', 'a 200 without ok:true is still an error, not empty data');
+
+  const badJson = await plugin.loadInjections(async () => ({ ok: true, status: 200, text: async () => 'not json' }));
+  assert.equal(badJson.status, 'error');
+  assert.deepEqual(badJson.records, []);
+
+  const network = await plugin.loadInjections(async () => { throw new Error('offline'); });
+  assert.equal(network.error, 'network');
+
+  const timeout = await plugin.loadInjections(async () => { const error = new Error('aborted'); error.name = 'AbortError'; throw error; });
+  assert.equal(timeout.error, 'timeout');
+
+  const noFetch = await plugin.loadInjections(undefined);
+  assert.equal(noFetch.error, 'no-fetch');
+
+  // Every branch resolves to a renderable state; nothing rejects.
+  for (const result of [ok, httpError, notOk, badJson, network, timeout, noFetch]) {
+    assert.ok(['ready', 'error'].includes(result.status));
+    assert.ok(Array.isArray(result.records));
   }
 });

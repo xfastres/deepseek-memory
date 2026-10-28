@@ -1016,25 +1016,32 @@ window.__ModuleLoader__.load({
      * Injection trace. Loads lazily on first expand, so the page costs nothing
      * when nobody looks, and shows the raw audit fields without inventing any.
      */
+    /**
+     * Read the audit route without throwing: the panel needs a renderable state,
+     * and a failed read must stay retryable instead of freezing the section.
+     */
+    async function loadInjections(fetchImpl) {
+      if (typeof fetchImpl !== 'function') return { status: 'error', records: [], error: 'no-fetch' };
+      let response;
+      try {
+        response = await fetchImpl(`${HOST_PREFIX}/injections?limit=50`, { headers: { accept: 'application/json' } });
+      } catch (error) {
+        return { status: 'error', records: [], error: error && error.name === 'AbortError' ? 'timeout' : 'network' };
+      }
+      let data = null;
+      try { data = JSON.parse(await response.text()); } catch { data = null; }
+      if (!response.ok || !data || data.ok !== true) {
+        return { status: 'error', records: [], error: `http-${response.status}` };
+      }
+      return { status: 'ready', records: Array.isArray(data.injections) ? data.injections : [], error: null };
+    }
+
     function InjectionPanel({ t }) {
       const [loaded, setLoaded] = useState(false);
       const [state, setState] = useState({ status: 'idle', records: [], error: null });
       const load = () => {
-        if (typeof fetch !== 'function') {
-          setState({ status: 'error', records: [], error: 'no-fetch' });
-          return;
-        }
         setState({ status: 'loading', records: [], error: null });
-        fetch(`${HOST_PREFIX}/injections?limit=50`, { headers: { accept: 'application/json' } })
-          .then((response) => response.text().then((raw) => {
-            let data = null;
-            try { data = JSON.parse(raw); } catch { data = null; }
-            if (!response.ok || !data || data.ok !== true) {
-              setState({ status: 'error', records: [], error: `http-${response.status}` });
-              return;
-            }
-            setState({ status: 'ready', records: Array.isArray(data.injections) ? data.injections : [], error: null });
-          }), () => setState({ status: 'error', records: [], error: 'network' }));
+        loadInjections(fetch).then(setState, () => setState({ status: 'error', records: [], error: 'network' }));
       };
       const rows = injectionView({ injections: state.records }, t);
       return h('details', {
@@ -1053,10 +1060,17 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dm-skeleton', 'aria-hidden': true }))
           : null,
         state.status === 'error'
-          ? h('div', { className: 'dm-notice dm-error', role: 'alert' }, h('strong', null, t('traceError')), h('p', null, state.error))
+          ? h('div', { className: 'dm-notice dm-error', role: 'alert' },
+            h('strong', null, t('traceError')),
+            h('p', null, state.error),
+            h('button', { type: 'button', className: 'dm-link', onClick: load }, t('retry')))
           : null,
         state.status === 'ready' && rows.length === 0
           ? h('p', { className: 'dm-muted' }, t('traceEmpty'))
+          : null,
+        state.status === 'ready' && rows.length > 0
+          ? h('div', { className: 'dm-trace-actions' },
+            h('button', { type: 'button', className: 'dm-refresh dm-quiet', onClick: load }, t('refresh')))
           : null,
         state.status === 'ready' && rows.length > 0
           ? h('ol', { className: 'dm-trace-list' }, rows.map((row) => h('li', { key: row.key, className: 'dm-trace-row' },
@@ -1532,6 +1546,7 @@ window.__ModuleLoader__.load({
       .dm-trace{margin:20px 0 0;padding:14px 16px;border:1px solid var(--dm-border);border-radius:12px;background:var(--dm-bg-soft)}
       .dm-trace>summary{cursor:pointer;font-size:15px;font-weight:600;line-height:24px;color:var(--dm-text)}
       .dm-trace-hint{margin:6px 0 0;font-size:12px;color:var(--dm-text-mute)}
+      .dm-trace-actions{display:flex;justify-content:flex-end;margin-top:10px}
       .dm-trace-list{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
       .dm-trace-row{padding:12px 14px;border:1px solid var(--dm-border);border-radius:10px;background:var(--dm-panel)}
       .dm-trace-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
@@ -1565,6 +1580,7 @@ window.__ModuleLoader__.load({
       injectionBadges,
       injectionRows,
       injectionView,
+      loadInjections,
       migrationSummary,
       mergeDraft,
       editMemory,
