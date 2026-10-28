@@ -115,10 +115,23 @@ export function createInjectionRuntime(options = {}) {
 
   async function refresh() {
     const state = await service.state();
+    // An objection suppresses a memory before retrieval ever sees it (D7):
+    // the filter runs here, not inside scoring, so no scorer can forget it.
+    let suppressed = [];
+    if (typeof service.suppressed === 'function') {
+      try {
+        const ids = await service.suppressed();
+        suppressed = Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
+      } catch {
+        suppressed = [];
+      }
+    }
+    const memories = Array.isArray(state.memories) ? state.memories : [];
     snapshot = {
       at: now().toISOString(),
       head: typeof state.head === 'string' ? state.head : null,
-      memories: Array.isArray(state.memories) ? state.memories : [],
+      memories: suppressed.length === 0 ? memories : memories.filter((memory) => !(memory !== null && typeof memory === 'object' && suppressed.includes(memory.id))),
+      suppressed: suppressed.length,
     };
     return snapshot;
   }

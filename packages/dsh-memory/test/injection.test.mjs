@@ -199,3 +199,41 @@ test('scopeShape never throws on hostile objects', () => {
   assert.equal(scopeShape(undefined).type, 'undefined');
   assert.equal(scopeShape('text').type, 'string');
 });
+
+test('an objected memory never reaches the prompt, and its siblings still do', async () => {
+  const memories = [
+    memory('M-1', '项目使用 pnpm 管理依赖'),
+    memory('M-2', '主题颜色用浅色'),
+  ];
+  const service = {
+    async state() { return { head: 'abc', memories }; },
+    async suppressed() { return ['M-2']; },
+  };
+  const runtime = createInjectionRuntime({ service, now });
+  await runtime.refresh();
+  assert.deepEqual(runtime.snapshot.memories.map((entry) => entry.id), ['M-1']);
+  assert.equal(runtime.snapshot.suppressed, 1);
+  const text = runtime.buildText(undefined).text;
+  assert.ok(text.includes('pnpm'));
+  assert.ok(!text.includes('浅色'), 'an objected memory must not appear in the prompt');
+});
+
+test('a service without a suppressed list keeps the old behaviour', async () => {
+  const memories = [memory('M-1', '项目使用 pnpm 管理依赖'), memory('M-2', '主题颜色用浅色')];
+  const runtime = createInjectionRuntime({ service: serviceOf(memories), now });
+  await runtime.refresh();
+  assert.deepEqual(runtime.snapshot.memories.map((entry) => entry.id), ['M-1', 'M-2']);
+  assert.equal(runtime.snapshot.suppressed, 0);
+  assert.ok(runtime.buildText(undefined).text.includes('浅色'));
+});
+
+test('a failing suppressed lookup drops the filter instead of breaking the turn', async () => {
+  const memories = [memory('M-1', '项目使用 pnpm 管理依赖')];
+  const runtime = createInjectionRuntime({
+    service: { async state() { return { head: 'abc', memories }; }, async suppressed() { throw new Error('runtime unavailable'); } },
+    now,
+  });
+  await runtime.refresh();
+  assert.equal(runtime.snapshot.memories.length, 1);
+  assert.ok(runtime.buildText(undefined).text.includes('pnpm'));
+});

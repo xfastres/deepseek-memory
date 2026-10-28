@@ -56,6 +56,8 @@ window.__ModuleLoader__.load({
       origin: '来源', originRule: '自动提取', originUser: '用户手动', originLegacy: '旧数据迁移', originLlm: '模型建议',
       sourceKindUserExplicit: '用户明确', sourceKindUserCorrection: '用户纠正', sourceKindSessionExtraction: '会话提取', sourceKindAgentInference: '模型推断',
       decisionNew: '新增', decisionDuplicate: '与现有记忆相同', decisionConflict: '需与现有记忆合并', decisionTarget: '参照 {id}',
+      object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reinstate: '恢复使用',
+      objectedDone: '已标记有误：这条记忆会立即退出检索与注入，账本内容不变。', objectFailed: '标记失败，请重试。', reinstateDone: '已恢复使用。',
       policy: '策略', policyAutoAccept: '可自动接受', policyAutoAcceptOff: '可自动接受（自动接受已关闭）', policyReview: '待复核', policyConflict: '冲突待处理', policyNoChange: '无需变化', policyReject: '拒绝写入',
       recentChanges: '最近变更 · Git 留痕（{count} 条）', recentChangesEmpty: '账本还没有提交记录。',
       recentChangesError: '无法读取账本变更记录。', ledgerHead: '账本 HEAD：{head}',
@@ -123,6 +125,8 @@ window.__ModuleLoader__.load({
       origin: 'Origin', originRule: 'auto-extracted', originUser: 'added by user', originLegacy: 'legacy import', originLlm: 'model suggestion',
       sourceKindUserExplicit: 'stated by user', sourceKindUserCorrection: 'user correction', sourceKindSessionExtraction: 'session extraction', sourceKindAgentInference: 'agent inference',
       decisionNew: 'new', decisionDuplicate: 'same as an existing memory', decisionConflict: 'needs merging with an existing memory', decisionTarget: 'refers to {id}',
+      object: 'mark wrong', objectConfirm: 'confirm: mark wrong', objected: 'suppressed', reinstate: 'restore',
+      objectedDone: 'Marked wrong: this memory leaves retrieval and injection now; the ledger is unchanged.', objectFailed: 'Could not record the objection. Try again.', reinstateDone: 'Restored.',
       policy: 'Policy', policyAutoAccept: 'eligible for auto-accept', policyAutoAcceptOff: 'eligible, auto-accept off', policyReview: 'needs review', policyConflict: 'conflict to resolve', policyNoChange: 'no change needed', policyReject: 'rejected by policy',
       recentChanges: 'Recent changes · Git trail ({count})', recentChangesEmpty: 'The ledger has no commits yet.',
       recentChangesError: 'Could not read the ledger change trail.', ledgerHead: 'Ledger HEAD: {head}',
@@ -1008,6 +1012,20 @@ window.__ModuleLoader__.load({
           return post('/review', payload);
         },
         /** Version timeline of one memory. Read-only, like /state. */
+        /** The runtime objections, and which memory ids they currently suppress. */
+        async objections() {
+          return get('/objections');
+        },
+        /** Call a memory wrong: runtime suppression only, never a ledger write. */
+        async object({ memoryId, reason }) {
+          const body = { memoryId };
+          if (typeof reason === 'string' && reason !== '') body.reason = reason;
+          return post('/objections', body);
+        },
+        /** Undo the objection for one memory. */
+        async clearObjection({ memoryId }) {
+          return post('/objections/clear', { memoryId });
+        },
         async history({ memoryId }) {
           return get(`/history?memoryId=${encodeURIComponent(String(memoryId ?? ''))}`);
         },
@@ -1424,6 +1442,22 @@ window.__ModuleLoader__.load({
           setChanges({ status: 'ready', rows: view.rows, head: view.head });
         }, () => setChanges({ status: 'error', rows: [], head: null }));
       };
+      /** Suppression from the Host runtime: objections, not ledger content. */
+      const [objections, setObjections] = useState({ status: 'idle', rows: [], suppressed: [] });
+      const [objectingId, setObjectingId] = useState(null);
+      const loadObjections = () => {
+        if (typeof fetch !== 'function') {
+          setObjections({ status: 'idle', rows: [], suppressed: [] });
+          return;
+        }
+        createHostClient(fetch).objections().then((data) => {
+          setObjections({
+            status: 'ready',
+            rows: Array.isArray(data.objections) ? data.objections : [],
+            suppressed: Array.isArray(data.suppressed) ? data.suppressed : [],
+          });
+        }, () => setObjections({ status: 'error', rows: [], suppressed: [] }));
+      };
       const [query, setQuery] = useState('');
       const [typeFilter, setTypeFilter] = useState('');
       /** Original-evidence branch: idle, loading, ready, missing or unavailable. */
@@ -1466,10 +1500,12 @@ window.__ModuleLoader__.load({
           setLedger(data.memories);
           loadHostQueue();
           loadChanges();
+          loadObjections();
         }, (error) => {
           setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
           setLedger([]);
           setHostQueue({ status: 'idle', rows: [], error: null });
+          setObjections({ status: 'idle', rows: [], suppressed: [] });
         });
       };
       useEffect(() => { probeHost(); }, []);
@@ -1645,6 +1681,32 @@ window.__ModuleLoader__.load({
           setNotice(t('retractFailed').replace('{reason}', String((error && error.reason) || 'network')));
         });
       };
+      const markObjection = (id) => {
+        if (ledgerPending || typeof fetch !== 'function') return;
+        setLedgerPending(true);
+        createHostClient(fetch).object({ memoryId: id }).then(() => {
+          setLedgerPending(false);
+          setObjectingId(null);
+          setNotice(t('objectedDone'));
+          loadObjections();
+        }, () => {
+          setLedgerPending(false);
+          setObjectingId(null);
+          setNotice(t('objectFailed'));
+        });
+      };
+      const reinstateObjection = (id) => {
+        if (ledgerPending || typeof fetch !== 'function') return;
+        setLedgerPending(true);
+        createHostClient(fetch).clearObjection({ memoryId: id }).then(() => {
+          setLedgerPending(false);
+          setNotice(t('reinstateDone'));
+          loadObjections();
+        }, () => {
+          setLedgerPending(false);
+          setNotice(t('objectFailed'));
+        });
+      };
       const ledgerItem = (row) => h('li', { key: row.id, className: 'dm-ledger-row' },
         h('div', { className: 'dm-ledger-line' },
           sourceKindLabel(row.sourceKind, t) === null ? null : h('span', { className: 'dm-badge dm-badge-muted' }, sourceKindLabel(row.sourceKind, t)),
@@ -1667,6 +1729,19 @@ window.__ModuleLoader__.load({
             ledgerDraft.error ? h('p', { className: 'dm-muted', role: 'alert' }, t(ledgerDraft.error)) : null)
           : h('div', { className: 'dm-ledger-actions' },
             ledgerEvidenceButton(row, t, openEvidence),
+            objections.suppressed.includes(row.id)
+              ? h('span', { className: 'dm-badge dm-badge-bad' }, t('objected'))
+              : null,
+            row.active && objections.suppressed.includes(row.id)
+              ? h('button', { type: 'button', className: 'dm-link', disabled: ledgerPending, onClick: () => reinstateObjection(row.id) }, t('reinstate'))
+              : null,
+            row.active && !objections.suppressed.includes(row.id)
+              ? (objectingId === row.id
+                ? h(React.Fragment, null,
+                  h('button', { type: 'button', className: 'dm-link dm-danger', disabled: ledgerPending, onClick: () => markObjection(row.id) }, t('objectConfirm')),
+                  h('button', { type: 'button', className: 'dm-link', onClick: () => setObjectingId(null) }, t('cancel')))
+                : h('button', { type: 'button', className: 'dm-link', onClick: () => setObjectingId(row.id) }, t('object')))
+              : null,
             row.active
               ? h('button', { type: 'button', className: 'dm-link', onClick: () => setLedgerDraft({ id: row.id, content: row.text, changeId: row.changeId, error: '' }) }, t('edit'))
               : null,

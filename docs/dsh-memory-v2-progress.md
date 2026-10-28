@@ -1004,3 +1004,15 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 当前仍存在的已知缺口（如实记录，不粉饰）：英文指令/偏好漏检（`english-instr`、`english-pref` 两例），因为规则只有中文标记；补英文规则需要单独设计与扩充用例，不属于本轮“只读测量”范围。证据违规率尚无法离线测量（需要真实会话 + 证据解析器），仍列为未验证项。
 - 测试：新增 `eval-extraction.test.mjs` 3 项（用例集结构完整性：id 唯一、正负样本各 ≥8、期望合法；计分器算术与空分母；**精度闸门**——不允许误报，不允许除已标注英文外的漏检）；`extraction.test.mjs` +1（负向偏好被识别，锁住本轮规则修复）；完整套件 **281/281 通过**；`git diff --check` 退出码 0。
 - 未验证：评估集是人工编写而非真实对话采样，阈值校准仍需真实样本；英文覆盖缺口未修；证据违规率、自动接受正确率（4.5 未启用）尚不可测。
+
+### 迭代 18（2026-10-28，阶段 3.6：异议状态与抑制机制）
+- 依据：`roadmap §12 阶段 3.6`（记忆详情的异议状态与抑制机制：明确错误后旧版本立即退出普通检索/注入）、`§14 D7`（用户异议优先于普通检索，不等待后台提案）、`§15` 高风险项「用户指出错误后旧记忆仍注入」、`§13.3` 第 1 条异议测试。
+- 复核到的现状缺口：运行时只有 `candidates`/`injections` 两个集合，没有异议记录；注入快照只按 `status === 'active'` 过滤，用户说「这条是错的」除了正式撤回（写 Git）之外没有更轻的即时抑制路径。
+- 实现（运行时、附加式、不改 Git 格式、不改写入语义、不新增注入器）：
+  - `host/runtime-store.js`：新增 `objections` 集合（旧 `runtime.json` 无此键仍可加载）+ `addObjection`（空 id → `empty`，已有生效异议 → `duplicate`）、`listObjections`、`suppressedIds`（去重、仅 active）、`reinstate`（标记 `reinstated` 保留历史，无生效异议 → `missing`）；`summary` 增加生效异议数。
+  - `host/injection.js`：`refresh()` 在取到账本快照后、任何打分之前，按 `service.suppressed()` 过滤记忆——抑制发生在检索入口，任何评分器都无法忘记它；`service.suppressed` 缺失或抛错时退回不过滤，绝不让一次运行时故障拖垮对话轮次；快照新增 `suppressed` 计数。
+  - `index.js`：注入运行时 service 增加 `suppressed: () => getApp().runtime.suppressedIds()`；`APP_ROUTE_NAMES` 增加 `objections` 与 `objections/clear`。
+  - `host/http-app.js`：`GET/POST /objections`（写路由要求可信来源 + JSON）、`POST /objections/clear`；POST 前校验记忆确实存在于账本（否则 404），不写 Git、不改记忆状态。
+  - `client.js`：账本行新增「标记有误」（两步确认）与「恢复使用」；生效异议显示 `已抑制` 徽标；Host 客户端新增 `objections()`、`object({memoryId, reason?})`、`clearObjection({memoryId})`；中英词典各 7 条。
+- 测试：`runtime-store` +2（异议持久化/去重/恢复与历史保留/无异议报 missing；旧 `runtime.json` 无 `objections` 仍加载）；`injection` +3（被异议记忆不进入 `snapshot.memories` 也不进入 prompt，兄弟记忆仍在；无 `suppressed` 契约时行为不变；`suppressed` 抛错时退回不过滤而非崩溃）；`http-app` +1（异议后 `/state` 记忆仍 active 且账本零改动、`suppressed` 生效、撤销后清空、未知 id 404、跨站请求 403）；`client-panels` +2（异议请求路径与「不伪造 reason」、中英词典键存在）；完整套件 **289/289 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上的立即抑制（需要新进程 + 真实对话：异议写入后下一次 pre-step 刷新才生效，最长 30 秒 TTL 或下一次 step 边界）；浏览器视觉与两步确认交互；生产数据未触碰。

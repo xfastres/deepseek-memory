@@ -419,6 +419,53 @@ export function createMemoryApp(options = {}) {
       }
     },
 
+    /**
+     * Objections: a claim the user called wrong.
+     *
+     * GET lists them, POST records one. The record is runtime-only; suppression
+     * takes effect on the next injection refresh, and the ledger is untouched.
+     */
+    [`${API_PREFIX}/objections`]: async (req, res) => {
+      if (req.method === 'GET') {
+        if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+        try {
+          const objections = await runtime.listObjections();
+          writeJson(res, 200, { ok: true, objections, suppressed: await runtime.suppressedIds() });
+        } catch (error) {
+          runtimeFail(res, error);
+        }
+        return;
+      }
+      if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      try {
+        const body = await readJsonBody(req);
+        const memoryId = typeof body.memoryId === 'string' ? body.memoryId.trim() : '';
+        if (memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
+        const state = await service.state();
+        const known = Array.isArray(state.memories) && state.memories.some((memory) => memory !== null && typeof memory === 'object' && memory.id === memoryId);
+        if (!known) { writeJson(res, 404, { ok: false, error: 'missing' }); return; }
+        const objection = await runtime.addObjection({ memoryId, reason: body.reason });
+        writeJson(res, 200, { ok: true, objection, suppressed: await runtime.suppressedIds() });
+      } catch (error) {
+        runtimeFail(res, error);
+      }
+    },
+
+    [`${API_PREFIX}/objections/clear`]: async (req, res) => {
+      if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      try {
+        const body = await readJsonBody(req);
+        const cleared = await runtime.reinstate(body.memoryId);
+        writeJson(res, 200, { ok: true, cleared, suppressed: await runtime.suppressedIds() });
+      } catch (error) {
+        runtimeFail(res, error);
+      }
+    },
+
     [`${API_PREFIX}/migrate`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
       if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }

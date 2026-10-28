@@ -61,6 +61,8 @@ test('the Host half exposes the ping probe plus the memory routes', () => {
     '/api/dsh-memory/candidates',
     '/api/dsh-memory/candidate',
     '/api/dsh-memory/review',
+    '/api/dsh-memory/objections',
+    '/api/dsh-memory/objections/clear',
     '/api/dsh-memory/injections',
   ]);
   assert.equal(new Set(paths).size, paths.length, 'route paths must be distinct');

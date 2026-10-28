@@ -40,12 +40,17 @@ export class RuntimeStoreError extends Error {
 }
 
 function emptyDocument() {
-  return { version: RUNTIME_VERSION, candidates: [], injections: [] };
+  return { version: RUNTIME_VERSION, candidates: [], injections: [], objections: [] };
 }
 
 function candidateId(now) {
   const stamp = now.toISOString().slice(0, 10).replace(/-/gu, '');
   return `C-${stamp}-${randomUUID().slice(0, 8)}`;
+}
+
+function objectionId(now) {
+  const stamp = now.toISOString().slice(0, 10).replace(/-/gu, '');
+  return `O-${stamp}-${randomUUID().slice(0, 8)}`;
 }
 
 function normalise(text) {
@@ -87,6 +92,7 @@ export function createRuntimeStore(options = {}) {
       version: RUNTIME_VERSION,
       candidates: Array.isArray(parsed.candidates) ? parsed.candidates : [],
       injections: Array.isArray(parsed.injections) ? parsed.injections : [],
+      objections: Array.isArray(parsed.objections) ? parsed.objections : [],
     };
   }
 
@@ -174,6 +180,65 @@ export function createRuntimeStore(options = {}) {
       });
     },
 
+    /**
+     * Record that the user called this memory wrong.
+     *
+     * Runtime only: an objection suppresses retrieval immediately (D7) and is
+     * not a ledger change. Retracting or editing the memory stays a separate,
+     * deliberate Git write.
+     */
+    async addObjection(input = {}) {
+      const memoryId = typeof input.memoryId === 'string' ? input.memoryId.trim() : '';
+      if (memoryId === '') throw new RuntimeStoreError('objection needs a memory id', 'empty');
+      return mutate((document) => {
+        const twin = document.objections.find((entry) => entry.memory_id === memoryId && entry.status === 'active');
+        if (twin) throw new RuntimeStoreError('this memory is already objected', 'duplicate');
+        const objection = {
+          id: objectionId(now()),
+          memory_id: memoryId,
+          reason: typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : '',
+          status: 'active',
+          created_at: now().toISOString(),
+        };
+        document.objections.push(objection);
+        return objection;
+      });
+    },
+
+    /** Objections in the order they were made. */
+    async listObjections() {
+      return (await read()).objections;
+    },
+
+    /** Memory ids the user has objected to and not reinstated. */
+    async suppressedIds() {
+      const document = await read();
+      const ids = [];
+      for (const entry of document.objections) {
+        if (entry === null || typeof entry !== 'object') continue;
+        if (entry.status !== 'active' || typeof entry.memory_id !== 'string') continue;
+        if (!ids.includes(entry.memory_id)) ids.push(entry.memory_id);
+      }
+      return ids;
+    },
+
+    /** Undo an objection for one memory; history of the objection is kept. */
+    async reinstate(memoryId) {
+      const id = typeof memoryId === 'string' ? memoryId.trim() : '';
+      if (id === '') throw new RuntimeStoreError('reinstate needs a memory id', 'empty');
+      return mutate((document) => {
+        let changed = 0;
+        for (const entry of document.objections) {
+          if (entry.memory_id !== id || entry.status !== 'active') continue;
+          entry.status = 'reinstated';
+          entry.reinstated_at = now().toISOString();
+          changed += 1;
+        }
+        if (changed === 0) throw new RuntimeStoreError(`no active objection for ${id}`, 'missing');
+        return changed;
+      });
+    },
+
     /** Move a candidate to accepted / rejected / edited. The ledger write happens elsewhere. */
     async setCandidateStatus(id, status, meta = {}) {
       if (!['pending', 'accepted', 'rejected'].includes(status)) {
@@ -227,10 +292,12 @@ export function createRuntimeStore(options = {}) {
     async summary() {
       const document = await read();
       const pending = document.candidates.filter((entry) => entry.status === 'pending').length;
+      const objected = document.objections.filter((entry) => entry !== null && typeof entry === 'object' && entry.status === 'active').length;
       return {
         candidates: document.candidates.length,
         pending,
         injections: document.injections.length,
+        objections: objected,
       };
     },
   };

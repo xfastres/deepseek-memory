@@ -23,14 +23,15 @@ async function load() {
   await import(`../client.js?panels=${Date.now()}-${Math.random()}`);
   const plugin = registration.factory(() => reactStub());
   let zh = {};
+  let en = {};
   plugin.apply({
     effect(callback) { callback(); return () => {}; },
     get() { return undefined; },
-    locale: { register(_ns, dictionaries) { zh = dictionaries.zh; return () => {}; }, bind() { return (key) => key; } },
+    locale: { register(_ns, dictionaries) { zh = dictionaries.zh; en = dictionaries.en ?? {}; return () => {}; }, bind() { return (key) => key; } },
     slots: { inject(_name, callback) { return callback(); }, register() { return () => {}; } },
   });
   const t = (key) => (zh[key] === undefined ? key : zh[key]);
-  return { plugin, t, css: styles.map((style) => style.textContent).join('\n') };
+  return { plugin, t, en, css: styles.map((style) => style.textContent).join('\n') };
 }
 
 const local = [
@@ -548,4 +549,39 @@ test('the policy decision is named honestly, including "off"', async () => {
   }).rows;
   assert.deepEqual(rows[0].policy, { decision: 'REVIEW_REQUIRED', reasons: ['auto-accept-disabled'] });
   assert.equal(rows[1].policy, null);
+});
+
+test('an objection goes to the runtime routes, never through the writer', async () => {
+  const { plugin } = await load();
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, objections: [], suppressed: [] }) };
+  };
+  const client = plugin.createHostClient(fetchImpl);
+  const listed = await client.objections();
+  assert.deepEqual(listed.suppressed, []);
+  await client.object({ memoryId: 'M-1', reason: '记错了' });
+  await client.object({ memoryId: 'M-2' });
+  await client.clearObjection({ memoryId: 'M-1' });
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    'api/dsh-memory/objections',
+    'api/dsh-memory/objections',
+    'api/dsh-memory/objections',
+    'api/dsh-memory/objections/clear',
+  ]);
+  assert.equal(calls[0].init.method, undefined, 'listing is a plain GET');
+  assert.deepEqual(JSON.parse(calls[1].init.body), { memoryId: 'M-1', reason: '记错了' });
+  assert.deepEqual(JSON.parse(calls[2].init.body), { memoryId: 'M-2' }, 'an absent reason is omitted, not invented');
+  assert.deepEqual(JSON.parse(calls[3].init.body), { memoryId: 'M-1' });
+  assert.equal(calls.every((call) => call.url.startsWith('api/dsh-memory/objections')), true);
+});
+
+test('the objection words exist in both dictionaries', async () => {
+  const { t, en } = await load();
+  for (const key of ['object', 'objectConfirm', 'objected', 'reinstate', 'objectedDone', 'objectFailed', 'reinstateDone']) {
+    assert.notEqual(t(key), key, 'missing zh text for ' + key);
+    assert.equal(typeof en[key], 'string', 'missing en text for ' + key);
+  }
 });

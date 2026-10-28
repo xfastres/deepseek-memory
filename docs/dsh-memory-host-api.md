@@ -93,6 +93,12 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 异议与抑制（阶段 3.6，运行时而非账本）：
+> - `GET /objections` → `{ ok, objections: [{ id, memory_id, reason, status, created_at, reinstated_at? }], suppressed: [memoryId] }`（只读）；
+> - `POST /objections { memoryId, reason? }` → 记录一条「用户认为这条记忆有误」的异议；memoryId 不在账本中返回 `404 missing`；同一记忆已有生效异议返回 `409 duplicate`；不写 Git、不改记忆状态；
+> - `POST /objections/clear { memoryId }` → 撤销该记忆的生效异议（保留异议历史，状态改 `reinstated`）；无生效异议返回 `404 missing`。
+> 生效异议的记忆在**下一次注入快照刷新**时被过滤，检索与注入都不会再使用它（D7：不等待后台提案完成）。账本内容、状态、版本历史都不受影响；要正式撤回仍走 `/retract`。
+
 > 记忆类型（写入约束）：候选的 `type` 落库前统一为账本词汇 `MEMORY_TYPES`；规则名 `instruction` 映射为 `constraint`（同一含义，避免接受时才因类型不合法失败）。账本无法存储的类型在 `/review` 接受时返回 `422 {"error":"invalid-type","candidateType":...}`，候选保持 `pending`，不写入、不改类型。
 
 > 策略决策（实现字段，只读派生）：`GET /candidates` 的每一项还带 `policy: { decision, reasons }`，取值即路线图 §7.1 的五种：`AUTO_ACCEPT` / `REVIEW_REQUIRED` / `CONFLICT` / `NO_CHANGE` / `REJECT`。当前 `AUTO_ACCEPT` 恒不会发生（自动接受开关未实现，合格候选返回 `REVIEW_REQUIRED` + `auto-accept-disabled`），因此该字段只表达“能做什么”，不代表已写入；写入仍只能经用户确认的 `/review`。

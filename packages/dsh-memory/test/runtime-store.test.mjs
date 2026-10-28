@@ -182,3 +182,57 @@ test('a candidate records where it came from and never invents one', async () =>
     assert.deepEqual(listed.map((entry) => entry.origin), ['rule', null, null]);
   });
 });
+
+test('an objection is recorded, suppresses its memory and can be reinstated', async () => {
+  await withRoot(async (root) => {
+    const store = createRuntimeStore({ root });
+    assert.deepEqual(await store.suppressedIds(), []);
+
+    const objection = await store.addObjection({ memoryId: 'M-1', reason: '记错了' });
+    assert.match(objection.id, /^O-\d{8}-/);
+    assert.equal(objection.status, 'active');
+    assert.deepEqual(await store.suppressedIds(), ['M-1']);
+    assert.equal((await store.listObjections()).length, 1);
+
+    await assert.rejects(() => store.addObjection({ memoryId: 'M-1' }), (error) => {
+      assert.equal(error.code, 'duplicate');
+      return true;
+    });
+    await assert.rejects(() => store.addObjection({ memoryId: '  ' }), (error) => {
+      assert.equal(error.code, 'empty');
+      return true;
+    });
+
+    const reopened = createRuntimeStore({ root });
+    assert.deepEqual(await reopened.suppressedIds(), ['M-1'], 'suppression survives a restart');
+
+    assert.equal(await reopened.reinstate('M-1'), 1);
+    assert.deepEqual(await reopened.suppressedIds(), []);
+    const history = await reopened.listObjections();
+    assert.equal(history[0].status, 'reinstated');
+    assert.equal(typeof history[0].reinstated_at, 'string');
+
+    await assert.rejects(() => reopened.reinstate('M-1'), (error) => {
+      assert.equal(error.code, 'missing');
+      return true;
+    });
+  });
+});
+
+test('a runtime document without objections still loads', async () => {
+  const { mkdtemp, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-noobj-'));
+  try {
+    await writeFile(join(dir, 'runtime.json'), JSON.stringify({ version: 1, candidates: [], injections: [] }), 'utf8');
+    const store = createRuntimeStore({ root: dir });
+    assert.deepEqual(await store.listObjections(), []);
+    assert.deepEqual(await store.suppressedIds(), []);
+    const summary = await store.summary();
+    assert.equal(summary.objections, 0);
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    await rm(dir, { recursive: true, force: true });
+  }
+});

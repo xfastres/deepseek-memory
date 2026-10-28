@@ -566,3 +566,57 @@ test('accepting a candidate whose type the ledger cannot store is refused with a
     assert.equal(state.json.memories.length, 0);
   });
 });
+
+test('an objection suppresses a memory without touching the ledger', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const added = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { content: '项目使用 pnpm', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    assert.equal(added.status, 200);
+    const memoryId = added.json.memory.id;
+
+    const objected = await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId, reason: '记错了' },
+    });
+    assert.equal(objected.status, 200);
+    assert.deepEqual(objected.json.suppressed, [memoryId]);
+
+    const listed = await call(app, '/api/dsh-memory/objections');
+    assert.equal(listed.json.objections.length, 1);
+    assert.equal(listed.json.objections[0].memory_id, memoryId);
+    assert.equal(listed.json.objections[0].reason, '记错了');
+
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 1, 'the ledger record is untouched');
+    assert.equal(state.json.memories[0].status, 'active');
+
+    const cleared = await call(app, '/api/dsh-memory/objections/clear', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId },
+    });
+    assert.equal(cleared.status, 200);
+    assert.deepEqual(cleared.json.suppressed, []);
+
+    const unknown = await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId: 'M-nope' },
+    });
+    assert.equal(unknown.status, 404);
+    assert.equal(unknown.json.error, 'missing');
+
+    const untrusted = await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' },
+      body: { memoryId },
+    });
+    assert.equal(untrusted.status, 403);
+  });
+});
