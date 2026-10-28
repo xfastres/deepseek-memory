@@ -24,6 +24,7 @@ import {
   writeJson,
 } from './host/http-app.js';
 import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
+import { extractCandidates } from './host/extraction.js';
 
 export { API_PREFIX, isTrustedWrite, writeJson };
 
@@ -283,7 +284,17 @@ export function apply(ctx) {
 
     // Injection is built first so the routes can refresh it after a write.
     const injection = createInjectionRuntime({ service: { state: () => getApp().service.state() } });
-    const status = () => injectionSnapshot(injection);
+    /**
+     * What the rule engine would propose for the current turn. Nothing is
+     * written: this is the evidence needed to tune precision before any
+     * automatic memory is created from a sentence.
+     */
+    let proposed = [];
+    const status = () => ({
+      ...injectionSnapshot(injection),
+      candidates: proposed.length,
+      candidate_sample: proposed.slice(0, 2).map((entry) => ({ type: entry.type, rule: entry.rule, confidence: entry.confidence, text: entry.text.slice(0, 60) })),
+    });
     const refresh = () => {
       injection.refresh().catch(() => {});
     };
@@ -335,7 +346,12 @@ export function apply(ctx) {
     // only place where waiting for the ledger is acceptable.
     if (typeof ctx.on === 'function') {
       const onPreStep = function onPreStep(payload, next) {
-        injection.observe(this === undefined ? ctx : this, payload);
+        const observed = injection.observe(this === undefined ? ctx : this, payload);
+        try {
+          proposed = observed === null ? [] : extractCandidates(observed.text);
+        } catch {
+          proposed = [];
+        }
         return Promise.resolve(injection.ensureFresh())
           .then(() => ensureContext())
           .catch(() => {})

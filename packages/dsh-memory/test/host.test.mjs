@@ -226,6 +226,9 @@ test('the step observer records the query and feeds the probe', async () => {
     assert.equal(probe.injection.last_turn, 2);
     assert.ok(probe.injection.last_query_chars > 0);
     assert.equal(typeof probe.injection.snapshot_at, 'string');
+    assert.equal(probe.injection.candidates, 1, 'the durable sentence is proposed');
+    assert.equal(probe.injection.candidate_sample[0].rule, 'instruction');
+    assert.ok(probe.injection.candidate_sample[0].text.includes('pnpm'));
   } finally {
     if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
     else process.env.DSH_MEMORY_DATA_DIR = previous;
