@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 提案面板（客户端）：`GET /proposals` 的每一行按 `target_memory_id` 与账本行对齐，修改前后用既有 diff 渲染（`before` 只来自账本中用户已看到的内容）；接受非 `add` 提案时客户端带上该记忆当前的 `changeId` 作为 `expectedBaseChangeId`，目标已消失或账本已变化时提示刷新，不静默覆盖。
+
 > AI 提案（§11 `memory_propose`）：
 > - `GET /proposals` → `{ ok, proposals: [{ id, action, target_memory_id, content, type, kind, reason, origin: 'llm', source_refs, status, created_at, reviewed_at?, memory_id? }], actions: ['add','update','merge','retract'] }`（只读）。
 > - `POST /proposals { proposalId, action: 'accept' | 'reject', expectedBaseChangeId? }` → `reject` 只改提案状态；`accept` 走**同一**单一 Writer：`add` 用 `service.add`（幂等键 `proposal:<id>`），`update`/`merge`/`retract` 必须提供 `expectedBaseChangeId`（缺失 → `400 missing-base`），目标记忆不存在或已被并发修改时由 Writer 返回 `404/409`，提案保持 `open` 以便重试。提案不是候选、不是记忆、永不进入注入；AI 不能批准自己的提案（D9）。

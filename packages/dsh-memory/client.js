@@ -58,6 +58,12 @@ window.__ModuleLoader__.load({
       decisionNew: '新增', decisionDuplicate: '与现有记忆相同', decisionConflict: '需与现有记忆合并', decisionTarget: '参照 {id}',
       object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reinstate: '恢复使用', objectKind: '问题类型',
       candidateProposed: '已提出', candidateValidating: '校验中', candidateReviewPending: '待复核', candidateAutoAccepted: '自动接受',
+      proposalsTitle: 'AI 提案（{count}）', proposalsHint: '来自模型的修改建议：接受才会写入账本，且按你看到的版本校验。',
+      proposalsEmpty: '没有待处理的提案。', proposalAccept: '接受提案', proposalReject: '拒绝提案',
+      proposalAdd: '新增', proposalUpdate: '修改', proposalMerge: '合并', proposalRetract: '撤回',
+      proposalStale: '账本已变化，请刷新后再决定。', proposalMissingTarget: '目标记忆已不在账本中。',
+      proposalAccepted: '提案已接受，写入已通过账本。', proposalRejected: '提案已拒绝。', proposalFailed: '提案操作未完成：{reason}',
+      proposalBefore: '当前版本', proposalAfter: '提案内容',
       candidateAcceptedByUser: '用户接受', candidateRejected: '已拒绝', candidateConflict: '冲突', candidateNoChange: '无需变化', candidateFailed: '失败',
       settingsTitle: '自动记忆设置', settingsOn: '允许自动提取候选（总开关）', settingsAutoAccept: '允许低风险候选自动写入（默认关闭）',
       settingsSave: '保存设置', settingsSaved: '设置已保存。', settingsFailed: '设置保存失败，请重试。', settingsHint: '自动接受只影响证据充分、无冲突、非敏感的事实/偏好/约束；随时可关闭。',
@@ -133,6 +139,12 @@ window.__ModuleLoader__.load({
       decisionNew: 'new', decisionDuplicate: 'same as an existing memory', decisionConflict: 'needs merging with an existing memory', decisionTarget: 'refers to {id}',
       object: 'mark wrong', objectConfirm: 'confirm: mark wrong', objected: 'suppressed', reinstate: 'restore', objectKind: 'problem',
       candidateProposed: 'proposed', candidateValidating: 'validating', candidateReviewPending: 'needs review', candidateAutoAccepted: 'auto-accepted',
+      proposalsTitle: 'AI proposals ({count})', proposalsHint: 'Suggestions from the model: nothing is written until you accept, checked against the version you see.',
+      proposalsEmpty: 'No open proposals.', proposalAccept: 'Accept proposal', proposalReject: 'Reject proposal',
+      proposalAdd: 'add', proposalUpdate: 'update', proposalMerge: 'merge', proposalRetract: 'retract',
+      proposalStale: 'The ledger changed; refresh before deciding.', proposalMissingTarget: 'The target memory is no longer in the ledger.',
+      proposalAccepted: 'Proposal accepted and written through the ledger.', proposalRejected: 'Proposal rejected.', proposalFailed: 'The proposal action did not finish: {reason}',
+      proposalBefore: 'Current version', proposalAfter: 'Proposed text',
       candidateAcceptedByUser: 'accepted by the user', candidateRejected: 'rejected', candidateConflict: 'conflict', candidateNoChange: 'no change needed', candidateFailed: 'failed',
       settingsTitle: 'Automatic memory', settingsOn: 'queue extracted candidates (master switch)', settingsAutoAccept: 'write low-risk candidates without review (off by default)',
       settingsSave: 'Save settings', settingsSaved: 'Settings saved.', settingsFailed: 'Could not save the settings. Try again.', settingsHint: 'Auto-accept only covers evidenced, non-conflicting, non-sensitive facts, preferences and constraints. It can be switched off at any time.',
@@ -1024,6 +1036,16 @@ window.__ModuleLoader__.load({
           return post('/review', payload);
         },
         /** Version timeline of one memory. Read-only, like /state. */
+        /** AI proposals (§11). Listing is read-only; deciding is not. */
+        async proposals() {
+          return get('/proposals');
+        },
+        /** Accept or reject one proposal. The user's action, never the model's. */
+        async reviewProposal({ proposalId, action, expectedBaseChangeId }) {
+          const body = { proposalId, action };
+          if (typeof expectedBaseChangeId === 'string' && expectedBaseChangeId !== '') body.expectedBaseChangeId = expectedBaseChangeId;
+          return post('/proposals', body);
+        },
         /** The automatic-memory switches, as the Host has them. */
         async settings() {
           return get('/settings');
@@ -1235,6 +1257,43 @@ window.__ModuleLoader__.load({
           };
         }),
       };
+    }
+
+    /** One proposal action in words; unknown or absent stays silent. */
+    function proposalActionLabel(action, t) {
+      if (action === 'add') return t('proposalAdd');
+      if (action === 'update') return t('proposalUpdate');
+      if (action === 'merge') return t('proposalMerge');
+      if (action === 'retract') return t('proposalRetract');
+      return null;
+    }
+
+    /**
+     * Rows for the proposal panel. The before text comes only from the ledger
+     * row the user can already see; nothing is invented when the target is gone.
+     */
+    function proposalView(data, ledgerRows, limit = 10) {
+      const list = data && Array.isArray(data.proposals) ? data.proposals : [];
+      const known = new Map((Array.isArray(ledgerRows) ? ledgerRows : []).map((row) => [row.id, row]));
+      return list.slice(0, limit).map((proposal) => {
+        const source = proposal !== null && typeof proposal === 'object' ? proposal : {};
+        const targetId = typeof source.target_memory_id === 'string' ? source.target_memory_id : null;
+        const target = targetId === null ? null : known.get(targetId);
+        return {
+          id: typeof source.id === 'string' ? source.id : '',
+          action: typeof source.action === 'string' ? source.action : null,
+          status: typeof source.status === 'string' ? source.status : null,
+          open: source.status === 'open',
+          kind: typeof source.kind === 'string' ? source.kind : null,
+          reason: typeof source.reason === 'string' ? source.reason : '',
+          targetId,
+          targetFound: targetId === null ? true : target !== undefined,
+          currentContent: target !== null && target !== undefined && typeof target.text === 'string' ? target.text : '',
+          proposedContent: typeof source.content === 'string' ? source.content : '',
+          changeId: target !== null && target !== undefined && typeof target.changeId === 'string' ? target.changeId : null,
+          createdAt: typeof source.created_at === 'string' ? source.created_at : null,
+        };
+      });
     }
 
     /** Rows for the read-only ledger list: what the memory store actually holds. */
@@ -1504,6 +1563,7 @@ window.__ModuleLoader__.load({
       const loadHostSettings = () => {
         if (typeof fetch !== 'function') {
           setHostSettings({ status: 'idle', settings: null, error: null });
+          setProposals({ status: 'idle', rows: [] });
           return;
         }
         createHostClient(fetch).settings().then((data) => {
@@ -1528,6 +1588,17 @@ window.__ModuleLoader__.load({
           });
           setNotice(t('settingsSaved'));
         }, () => setNotice(t('settingsFailed')));
+      };
+      /** Open AI proposals: read-only until the user decides. */
+      const [proposals, setProposals] = useState({ status: 'idle', rows: [] });
+      const loadProposals = () => {
+        if (typeof fetch !== 'function') {
+          setProposals({ status: 'idle', rows: [] });
+          return;
+        }
+        createHostClient(fetch).proposals().then((data) => {
+          setProposals({ status: 'ready', rows: proposalView(data, ledger) });
+        }, () => setProposals({ status: 'error', rows: [] }));
       };
       const loadObjections = () => {
         if (typeof fetch !== 'function') {
@@ -1587,6 +1658,7 @@ window.__ModuleLoader__.load({
           loadChanges();
           loadObjections();
           loadHostSettings();
+          loadProposals();
         }, (error) => {
           setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
           setLedger([]);
@@ -1766,6 +1838,31 @@ window.__ModuleLoader__.load({
           setLedgerPending(false);
           setRetractId(null);
           setNotice(t('retractFailed').replace('{reason}', String((error && error.reason) || 'network')));
+        });
+      };
+      const reviewProposalRow = (row, action) => {
+        if (ledgerPending || typeof fetch !== 'function') return;
+        if (action === 'accept' && row.targetId !== null && !row.targetFound) {
+          setNotice(t('proposalMissingTarget'));
+          return;
+        }
+        if (action === 'accept' && row.action !== 'add' && row.changeId === null) {
+          setNotice(t('proposalStale'));
+          return;
+        }
+        setLedgerPending(true);
+        createHostClient(fetch).reviewProposal({
+          proposalId: row.id,
+          action,
+          expectedBaseChangeId: action === 'accept' && row.action !== 'add' ? row.changeId : undefined,
+        }).then(() => {
+          setLedgerPending(false);
+          setNotice(action === 'accept' ? t('proposalAccepted') : t('proposalRejected'));
+          probeHost();
+        }, (error) => {
+          setLedgerPending(false);
+          const reason = String((error && error.reason) || 'network');
+          setNotice(reason === 'stale' ? t('proposalStale') : t('proposalFailed').replace('{reason}', reason));
         });
       };
       const markObjection = (id) => {
@@ -1996,6 +2093,26 @@ window.__ModuleLoader__.load({
             h('span', null, hostLine(host, t))),
           host.status === 'ok' && migratable > 0
             ? h('button', { type: 'button', className: 'dm-refresh', disabled: migrating, onClick: migrateToHost }, t('migrateButton').replace('{count}', String(migratable)))
+            : null,
+          host.status === 'ok' && proposals.status === 'ready' && proposals.rows.some((row) => row.open)
+            ? h('section', { className: 'dm-proposals' },
+              h('p', { className: 'dm-muted' }, t('proposalsTitle').replace('{count}', String(proposals.rows.filter((row) => row.open).length))),
+              h('p', { className: 'dm-muted' }, t('proposalsHint')),
+              h('ul', { className: 'dm-proposal-list' }, proposals.rows.filter((row) => row.open).map((row) => h('li', { key: row.id, className: 'dm-proposal-row' },
+                h('span', { className: 'dm-badge dm-badge-pending' }, proposalActionLabel(row.action, t) === null ? String(row.action) : proposalActionLabel(row.action, t)),
+                row.targetId === null ? null : h('span', { className: 'dm-muted' }, row.targetId),
+                correctionLabel(row.kind, t) === null ? null : h('span', { className: 'dm-badge dm-badge-muted' }, correctionLabel(row.kind, t)),
+                row.reason === '' ? null : h('span', { className: 'dm-muted' }, row.reason),
+                row.action === 'retract'
+                  ? h('p', { className: 'dm-muted' }, t('proposalBefore') + '：' + row.currentContent)
+                  : h('div', null,
+                    h('p', { className: 'dm-muted' }, t('proposalBefore') + ' / ' + t('proposalAfter')),
+                    h('pre', { className: 'dm-diff' }, diffLines(row.currentContent, row.proposedContent)
+                      .map((line, index) => h('code', { key: String(index), className: 'dm-diff-' + line.kind },
+                        (line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  ') + line.text + '\n')))),
+                h('span', { className: 'dm-host-queue-actions' },
+                  h('button', { type: 'button', className: 'dm-link', disabled: ledgerPending, onClick: () => reviewProposalRow(row, 'accept') }, t('proposalAccept')),
+                  h('button', { type: 'button', className: 'dm-link dm-danger', disabled: ledgerPending, onClick: () => reviewProposalRow(row, 'reject') }, t('proposalReject')))))))
             : null,
           host.status === 'ok' && hostSettings.status === 'ready' && hostSettings.settings !== null
             ? h('section', { className: 'dm-settings' },
@@ -2347,6 +2464,8 @@ window.__ModuleLoader__.load({
       changeView,
       correctionLabel,
       candidateStatusLabel,
+      proposalActionLabel,
+      proposalView,
       decisionLabel,
       policyLabel,
       originLabel,

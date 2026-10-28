@@ -1058,3 +1058,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `host/http-app.js`：`GET/POST /proposals`；accept 走同一单一 Writer（add 幂等键 `proposal:<id>`；update/merge/retract 必须带 `expectedBaseChangeId`）；已被并发修改/忙时提案保持 `open` 可重试；`/proposals` 加入 `APP_ROUTE_NAMES`。
 - 测试：新增 `proposals.test.mjs` 6 项（存储与证据、缺证据/缺目标/坏动作/坏 kind 拒绝、去重与已解决后可再提、工具正常提案并记录证据、工具在无轮次/无证据/坏动作时拒绝且不写；未知提案状态拒绝）；`http-app` +3（提案列出、无 base 400、接受后写入且版本 +1、重复接受 409、拒绝零改动、retract 提案走 Writer、add 提案无需 base、403/415/400/404；新增「每个对外路由名都必须有处理器」防回归测试——本轮正是靠它发现 `/proposals` 未真正插入）；`host.test` 路由与工具注册更新（2 个工具）；完整套件 **322/322 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主的工具调用（需新进程；模型是否按预期调用 `memory_propose`、`agent/pre-step` 的 payload 形状在真实会话中是否如测试夹具）；提案面板 UI（尚未实现，下一轮）；`memory_search` 与 `memory_object` 未实现；浏览器视觉与交互。
+
+### 迭代 23（2026-10-28，阶段 4.6 收尾：提案面板）
+- 依据：`§10.2`（单条记忆操作：让 LLM 提出修改、接受/拒绝提案、修改前后用 diff、区分「LLM 建议」与正式版本）、迭代 22 的 `/proposals` 接口。缺口：接口已就绪但界面没有任何入口，用户看不到模型提案。
+- 实现：
+  - `client.js`：Host 客户端新增 `proposals()`、`reviewProposal({proposalId, action, expectedBaseChangeId})`；新增 `proposalView`（按 `target_memory_id` 对齐账本行，`before` 只取账本现有文本，目标缺失时 `targetFound=false` 而不是编造内容）与 `proposalActionLabel`；记忆面板新增「AI 提案」区：动作徽标、目标 id、纠错类型、理由、既有 `diffLines` 渲染的前后差异、接受/拒绝按钮；接受 update/merge/retract 时带当前 `changeId`，目标消失或 `stale` 时提示刷新而不写入；中英词典各 13 条。
+- 测试：`client-panels` +2（提案行携带用户必须确认的 `changeId`、`add` 无目标不算缺失、已消失目标标记为缺失、动作标签与未知返回 null；请求体只带真实 base id、拒绝不带 base）；完整套件 **324/324 通过**；`git diff --check` 退出码 0。
+- 未验证：浏览器实际渲染与交互（提案区的视觉、diff 折叠、按钮状态）；真实宿主里模型产出的提案在面板中的端到端；自动接受与提案面板同时存在时的排序/分页（当前各显示前 10 条）。

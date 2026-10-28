@@ -639,3 +639,45 @@ test('candidate statuses are named, and the queue action follows the Host flag',
   assert.equal(view.rows[0].open, true);
   assert.equal(view.rows[1].open, false);
 });
+
+test('proposal rows carry the ledger version the user must confirm against', async () => {
+  const { plugin, t } = await load();
+  const ledger = plugin.ledgerView([
+    { id: 'M-1', status: 'active', content: '项目使用 pnpm', type: 'fact', last_change_id: 'c-1', version: 1 },
+  ]);
+  const view = plugin.proposalView({
+    proposals: [
+      { id: 'P-1', action: 'update', target_memory_id: 'M-1', content: '项目使用 pnpm 9', status: 'open', kind: 'outdated', reason: '版本变了' },
+      { id: 'P-2', action: 'add', target_memory_id: null, content: '新事实', status: 'open' },
+      { id: 'P-3', action: 'retract', target_memory_id: 'M-gone', content: '', status: 'open' },
+    ],
+  }, ledger);
+  assert.equal(view[0].currentContent, '项目使用 pnpm');
+  assert.equal(view[0].proposedContent, '项目使用 pnpm 9');
+  assert.equal(view[0].changeId, 'c-1');
+  assert.equal(view[0].targetFound, true);
+  assert.equal(view[1].targetId, null);
+  assert.equal(view[1].targetFound, true, 'an add proposal has no target, so nothing is missing');
+  assert.equal(view[2].targetFound, false, 'a retract proposal for a gone memory is not silently accepted');
+  assert.equal(plugin.proposalActionLabel('merge', t), '合并');
+  assert.equal(plugin.proposalActionLabel('nonsense', t), null);
+});
+
+test('proposal decisions send the proposal id, the action, and only a real base change id', async () => {
+  const { plugin, t } = await load();
+  const calls = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, proposal: { status: 'accepted' } }) };
+  });
+  const listed = await client.proposals();
+  assert.deepEqual(listed.proposal, { status: 'accepted' });
+  await client.reviewProposal({ proposalId: 'P-1', action: 'accept', expectedBaseChangeId: 'c-1' });
+  await client.reviewProposal({ proposalId: 'P-2', action: 'reject' });
+  assert.deepEqual(calls.map((call) => call.url), ['api/dsh-memory/proposals', 'api/dsh-memory/proposals', 'api/dsh-memory/proposals']);
+  assert.deepEqual(JSON.parse(calls[1].init.body), { proposalId: 'P-1', action: 'accept', expectedBaseChangeId: 'c-1' });
+  assert.deepEqual(JSON.parse(calls[2].init.body), { proposalId: 'P-2', action: 'reject' }, 'a rejection carries no base change id');
+  for (const key of ['proposalsTitle', 'proposalsHint', 'proposalAccept', 'proposalReject', 'proposalStale', 'proposalMissingTarget', 'proposalAccepted', 'proposalRejected', 'proposalFailed', 'proposalBefore', 'proposalAfter']) {
+    assert.notEqual(t(key), key, 'missing zh text for ' + key);
+  }
+});
