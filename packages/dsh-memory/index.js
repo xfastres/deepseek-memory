@@ -370,6 +370,7 @@ export function apply(ctx) {
               turn,
               confidence: entry.confidence,
               reason: entry.rule,
+              origin: 'rule',
               sourceRef: ref,
             })).catch(() => {});
           }

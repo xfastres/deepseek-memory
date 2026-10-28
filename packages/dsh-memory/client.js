@@ -53,6 +53,8 @@ window.__ModuleLoader__.load({
       hostBusy: '账本正在写入，请稍后重试。', missingMemory: '这条记忆在账本中已不存在。',
       hostCandidates: 'Host 候选队列（{count}）',
       history: '历史', historyLoading: '正在读取版本历史…', historyError: '无法读取版本历史。',
+      origin: '来源', originRule: '自动提取', originUser: '用户手动', originLegacy: '旧数据迁移', originLlm: '模型建议',
+      sourceKindUserExplicit: '用户明确', sourceKindUserCorrection: '用户纠正', sourceKindSessionExtraction: '会话提取', sourceKindAgentInference: '模型推断',
       recentChanges: '最近变更 · Git 留痕（{count} 条）', recentChangesEmpty: '账本还没有提交记录。',
       recentChangesError: '无法读取账本变更记录。', ledgerHead: '账本 HEAD：{head}',
       historyEmpty: '没有可显示的版本。', historyVersion: '版本 {version}',
@@ -116,6 +118,8 @@ window.__ModuleLoader__.load({
       hostBusy: 'The ledger is writing; retry in a moment.', missingMemory: 'This memory no longer exists in the ledger.',
       hostCandidates: 'Host candidate queue ({count})',
       history: 'History', historyLoading: 'Reading version history…', historyError: 'Could not read the version history.',
+      origin: 'Origin', originRule: 'auto-extracted', originUser: 'added by user', originLegacy: 'legacy import', originLlm: 'model suggestion',
+      sourceKindUserExplicit: 'stated by user', sourceKindUserCorrection: 'user correction', sourceKindSessionExtraction: 'session extraction', sourceKindAgentInference: 'agent inference',
       recentChanges: 'Recent changes · Git trail ({count})', recentChangesEmpty: 'The ledger has no commits yet.',
       recentChangesError: 'Could not read the ledger change trail.', ledgerHead: 'Ledger HEAD: {head}',
       historyEmpty: 'No versions to show.', historyVersion: 'Version {version}',
@@ -1051,6 +1055,24 @@ window.__ModuleLoader__.load({
       return out;
     }
 
+    /** How a formal memory came to be, in words; unknown or absent stays silent. */
+    function sourceKindLabel(kind, t) {
+      if (kind === 'user-explicit') return t('sourceKindUserExplicit');
+      if (kind === 'user-correction') return t('sourceKindUserCorrection');
+      if (kind === 'session-extraction') return t('sourceKindSessionExtraction');
+      if (kind === 'agent-inference') return t('sourceKindAgentInference');
+      return null;
+    }
+
+    /** A candidate origin in words; unknown or absent is said plainly. */
+    function originLabel(origin, t) {
+      if (origin === 'rule') return t('originRule');
+      if (origin === 'user') return t('originUser');
+      if (origin === 'legacy') return t('originLegacy');
+      if (origin === 'llm') return t('originLlm');
+      return null;
+    }
+
     /** Recent-change rows for the Git trail; missing fields stay null. */
     function changeView(data) {
       const list = Array.isArray(data && data.changes) ? data.changes : [];
@@ -1104,6 +1126,7 @@ window.__ModuleLoader__.load({
             type: typeof source.type === 'string' ? source.type : null,
             status: typeof source.status === 'string' ? source.status : null,
             reason: typeof source.reason === 'string' ? source.reason : '',
+            origin: typeof source.origin === 'string' ? source.origin : null,
             refs: evidenceRefsOf(source),
             createdAt: typeof source.created_at === 'string' ? source.created_at : null,
           };
@@ -1124,6 +1147,7 @@ window.__ModuleLoader__.load({
           // Only forwarded when the ledger actually stored it; never invented.
           type: memory && typeof memory.type === 'string' ? memory.type : null,
           refs: evidenceRefsOf(memory),
+          sourceKind: memory && typeof memory.source_kind === 'string' ? memory.source_kind : null,
           changeId: memory && typeof memory.last_change_id === 'string' ? memory.last_change_id : null,
           version: memory && Number.isInteger(memory.version) ? memory.version : null,
           scope: memory && typeof memory.scope === 'string' ? memory.scope : null,
@@ -1591,6 +1615,7 @@ window.__ModuleLoader__.load({
       };
       const ledgerItem = (row) => h('li', { key: row.id, className: 'dm-ledger-row' },
         h('div', { className: 'dm-ledger-line' },
+          sourceKindLabel(row.sourceKind, t) === null ? null : h('span', { className: 'dm-badge dm-badge-muted' }, sourceKindLabel(row.sourceKind, t)),
           h('span', { className: 'dm-type dm-type-' + (row.type === 'constraint' ? 'constraint' : 'plain') }, row.type === null ? t('notProvided') : row.type),
           h('span', { className: 'dm-muted' }, (row.active ? t('ledgerActive') : t('ledgerInactive')) + ' · ' + row.text)),
         ledgerDraft && ledgerDraft.id === row.id
@@ -1643,6 +1668,7 @@ window.__ModuleLoader__.load({
         h('span', { className: 'dm-badge dm-badge-' + (row.status === 'pending' ? 'pending' : row.status === 'accepted' ? 'ok' : 'muted') }, row.status === null ? t('notProvided') : row.status),
         h('span', { className: 'dm-muted' }, row.text),
         row.reason === '' ? null : h('span', { className: 'dm-muted' }, row.reason),
+        originLabel(row.origin, t) === null ? null : h('span', { className: 'dm-badge dm-badge-muted' }, t('origin') + ' · ' + originLabel(row.origin, t)),
         ledgerEvidenceButton({ refs: row.refs }, t, openEvidence),
         row.status === 'pending'
           ? h('span', { className: 'dm-host-queue-actions' },
@@ -2092,6 +2118,8 @@ window.__ModuleLoader__.load({
       createHostClient,
       hostLine,
       changeView,
+      originLabel,
+      sourceKindLabel,
       diffLines,
       versionView,
       hostCandidateView,

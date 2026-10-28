@@ -166,3 +166,19 @@ test('the summary counts pending candidates without a full read by the caller', 
     assert.equal(summary.injections, 0);
   });
 });
+
+test('a candidate records where it came from and never invents one', async () => {
+  await withRoot(async (root) => {
+    const store = createRuntimeStore({ root });
+    const ruled = await store.addCandidate({ text: '项目使用 pnpm', sourceRef: REF, origin: 'rule' });
+    assert.equal(ruled.origin, 'rule');
+    const plain = await store.addCandidate({ text: '用户手动加入的', sourceRef: REF });
+    assert.equal(plain.origin, null, 'an absent origin stays null');
+    const odd = await store.addCandidate({ text: '来路不明的一条', sourceRef: REF, origin: 'whatever' });
+    assert.equal(odd.origin, null, 'an unknown origin is not stored as-is');
+
+    const reopened = createRuntimeStore({ root });
+    const listed = await reopened.listCandidates();
+    assert.deepEqual(listed.map((entry) => entry.origin), ['rule', null, null]);
+  });
+});

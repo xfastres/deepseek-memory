@@ -474,3 +474,37 @@ test('the Git trail keeps commit facts and tolerates missing ones', async () => 
   await client.changes({ limit: 0 });
   assert.equal(calls[2], 'api/dsh-memory/changes', 'an unusable limit is not sent');
 });
+
+test('a candidate origin is named in words, or left absent', async () => {
+  const { plugin, t } = await load();
+  assert.equal(plugin.originLabel('rule', t), '自动提取');
+  assert.equal(plugin.originLabel('user', t), '用户手动');
+  assert.equal(plugin.originLabel('legacy', t), '旧数据迁移');
+  assert.equal(plugin.originLabel('llm', t), '模型建议');
+  assert.equal(plugin.originLabel(null, t), null, 'no origin invents no label');
+  assert.equal(plugin.originLabel('unknown-origin', t), null, 'an unknown origin is not translated into a claim');
+
+  const rows = plugin.hostCandidateView({
+    candidates: [
+      { id: 'C-1', text: '自动提取的', origin: 'rule' },
+      { id: 'C-2', text: '没有来源的' },
+      { id: 'C-3', text: '非法来源', origin: 42 },
+    ],
+  }).rows;
+  assert.deepEqual(rows.map((row) => row.origin), ['rule', null, null]);
+});
+
+test('a formal memory describes its origin on the row, without inventing one', async () => {
+  const { plugin, t } = await load();
+  assert.equal(plugin.sourceKindLabel('user-explicit', t), '用户明确');
+  assert.equal(plugin.sourceKindLabel('agent-inference', t), '模型推断');
+  assert.equal(plugin.sourceKindLabel(null, t), null);
+  assert.equal(plugin.sourceKindLabel('something-else', t), null);
+
+  const rows = plugin.ledgerView([
+    { id: 'M-1', status: 'active', content: 'x', type: 'fact', source_kind: 'session-extraction' },
+    { id: 'M-2', status: 'active', content: 'y', type: 'fact' },
+  ]);
+  assert.equal(rows[0].sourceKind, 'session-extraction');
+  assert.equal(rows[1].sourceKind, null);
+});

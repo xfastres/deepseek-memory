@@ -23,6 +23,11 @@ export const RUNTIME_FILE = 'runtime.json';
 export const RUNTIME_VERSION = 1;
 export const MAX_INJECTIONS = 200;
 export const INJECTION_MAX_AGE_DAYS = 30;
+/**
+ * Where a candidate came from. Additive field: an absent or unknown origin is
+ * stored as null so old documents keep loading and nothing is invented.
+ */
+export const CANDIDATE_ORIGINS = Object.freeze(['rule', 'user', 'legacy', 'llm']);
 
 export class RuntimeStoreError extends Error {
   constructor(message, code, details = {}) {
@@ -158,6 +163,7 @@ export function createRuntimeStore(options = {}) {
           source_refs: [sourceRef],
           confidence: typeof input.confidence === 'number' ? input.confidence : 0.6,
           reason: typeof input.reason === 'string' ? input.reason : '',
+          origin: CANDIDATE_ORIGINS.includes(input.origin) ? input.origin : null,
           created_at: now().toISOString(),
         };
         document.candidates.push(candidate);

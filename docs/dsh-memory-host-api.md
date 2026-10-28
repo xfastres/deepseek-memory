@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 候选来源与正式记忆来源（实现字段，附加、可缺省）：`POST /candidate` 可带 `origin`（`rule` / `user` / `legacy` / `llm`，非法或缺失存为 `null`）；`/state`、`/history`、`/changes` 中的正式记忆带 `source_kind`（`user-explicit` / `user-correction` / `session-extraction` / `agent-inference`）。两者都只描述“这条内容怎么来的”，不改变写入语义。
+
 > 实现现状与本文档早期规划的差异（不隐藏）：当前已实现的读接口是 `/state`、`/candidates`、`/injections`、`/history`；写接口是 `/add`、`/update`、`/retract`、`/candidate`、`/review`、`/migrate`。上表中的 `revision`、`/edit`、`/settings`、`/import` 属于规划条目，尚未实现，以 `docs/dsh-memory-v2-progress.md` 的迭代记录为准。
 
 ### 3.2 写

@@ -136,3 +136,20 @@ test('retracting keeps the record but marks it withdrawn', async () => {
     assert.equal(after.version, 2);
   });
 });
+
+test('a formal memory says how it came to be', async () => {
+  const { createLedgerService } = await import('../host/ledger-service.js');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-kind-'));
+  try {
+    const service = createLedgerService({ root: join(dir, 'ledger') });
+    const added = await service.add({ content: '项目使用 pnpm', sourceRefs: [{ session_id: 's1', event_seq: 2 }] });
+    assert.equal(added.memory.source_kind, 'user-explicit');
+    const state = await service.state();
+    assert.equal(state.memories[0].source_kind, 'user-explicit');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

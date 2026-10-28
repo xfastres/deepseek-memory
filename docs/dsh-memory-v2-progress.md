@@ -964,3 +964,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：`ledger-service.recentChanges(limit)`；`http-app` 路由与 `APP_ROUTE_NAMES` 登记；客户端 `changes()` 只读方法、`changeView` 归一化、Host 在线时的“最近变更 · Git 留痕”区块（类型徽标、记忆 id、原因、提交时间、短提交号、HEAD 前 12 位），含空态与错误态。
 - 测试：`http-app` +1（13 项：空账本无变更、ADD→UPDATE 顺序与新到旧、memory_id/content、limit 截断、bad-limit、403、405）；`client-panels` +1（22 项：归一化、缺失字段 null、limit 不上送 0、请求路径）；`host` 路由清单补 `/changes`（数量已改为从 `APP_ROUTE_NAMES` 推导）；完整套件 **252/252 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上的渲染与真实提交时间；浏览器视觉；跨进程并发写时 Git 日志的稳定性。
+
+### 迭代 13（2026-10-28，阶段 3 收尾：区分“建议/自动提取”与“已保存正式版本”）
+- 先核实现状（不臆断）：自动提取**已经接线**——`index.js` 的 `agent/pre-step` 里 `extractCandidates(observed.text)` → `proposeForReview` → `runtime.addCandidate`（带证据解析，解析失败就不写、不编造），所以“提案”在实现中就是运行时候选队列，不是另一种数据形态；`/state` 的正式记忆则完全来自 Git 账本。两者在界面里已分区展示。
+- 真实缺口：候选记录**没有来源字段**，无法区分“规则自动提取”“用户手动加入”“旧数据迁移”；正式记忆的 `/state` 对象**没有 `source_kind`**，界面无法说明“这是用户明确说的还是模型推断的”。
+- 改动：`runtime-store` 增加附加字段 `origin`（白名单 `rule`/`user`/`legacy`/`llm`，其余或缺失存 `null`）+ 导出 `CANDIDATE_ORIGINS`；`index.js` 自动提取写 `origin: 'rule'`；`/candidate` 透传调用方 `origin`；迁移导入写 `origin: 'legacy'`；`toUiMemory` 增加 `source_kind`；客户端 `originLabel`/`sourceKindLabel`（未知或缺失返回 null，不编造），Host 队列行与账本行分别显示来源徽标。
+- 测试：`runtime-store` +1（origin 持久化、缺失/非法为 null）；`http-app` 既有用例补断言（调用方 origin 保留、迁移候选为 legacy）；`ledger-service` +1（新增记忆 `source_kind === 'user-explicit'`）；`client-panels` +1（标签映射未知返回 null、`ledgerView` 透传 `sourceKind`）；完整套件 **256/256 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上自动提取产生的候选是否带 `origin: 'rule'`（需要真实对话与新进程）；浏览器视觉；旧 runtime.json 文档无 `origin` 时的显示（逻辑上为 null，真实旧文件未回放验证）。

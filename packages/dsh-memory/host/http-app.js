@@ -345,6 +345,7 @@ export function createMemoryApp(options = {}) {
           turn: body.turn,
           confidence: body.confidence,
           reason: body.reason,
+          origin: body.origin,
           sourceRef: ref,
         });
         writeJson(res, 200, { ok: true, candidate });
@@ -455,6 +456,7 @@ export function createMemoryApp(options = {}) {
           sessionId: source.session_id,
           turn: source.turn,
           confidence: candidate.confidence,
+          origin: 'legacy',
           sourceRef: ref,
         });
         imported.push({ legacyId: candidate.id ?? null, candidateId: added.id });

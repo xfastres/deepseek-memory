@@ -219,6 +219,7 @@ test('migration imports what it can prove and reports what it cannot', async () 
 
     const queued = await call(app, '/api/dsh-memory/candidates');
     assert.equal(queued.json.candidates.length, 1);
+    assert.equal(queued.json.candidates[0].origin, 'legacy', 'imported candidates say where they came from');
     assert.equal(queued.json.candidates[0].text, '待确认的偏好');
 
     const state = await call(app, '/api/dsh-memory/state');
@@ -250,10 +251,11 @@ test('a candidate is queued, then accepted into the ledger with its own evidence
     const queued = await call(app, '/api/dsh-memory/candidate', {
       method: 'POST',
       headers: { ...BROWSER, ...JSON_HEADERS },
-      body: { text: '用户偏好中文回答', type: 'preference', sessionId: 's1', turn: 1 },
+      body: { text: '用户偏好中文回答', type: 'preference', sessionId: 's1', turn: 1, origin: 'user' },
     });
     assert.equal(queued.status, 200);
     assert.equal(queued.json.candidate.status, 'pending');
+    assert.equal(queued.json.candidate.origin, 'user', 'the declared origin is kept');
     assert.equal(queued.json.candidate.source_refs[0].event_seq, 2);
 
     const list = await call(app, '/api/dsh-memory/candidates');

@@ -41,6 +41,9 @@ function toUiMemory(record, version) {
     confidence: record.confidence,
     accepted_at: record.updated_at,
     last_change_id: record.last_change_id,
+    // Where the record came from: user-explicit / user-correction /
+    // session-extraction / agent-inference. Absent stays null.
+    source_kind: typeof record.source_kind === 'string' ? record.source_kind : null,
     source: firstRef === null ? null : { session_id: firstRef.session_id, event_seq: firstRef.event_seq },
     source_refs: record.source_refs,
   };
