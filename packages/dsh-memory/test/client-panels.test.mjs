@@ -696,3 +696,28 @@ test('a new wording asks the Host to clear the review objection it answers', asy
   });
   assert.equal(JSON.parse(calls[1].init.body).clearObjection, undefined, 'an ordinary edit does not claim to answer anything');
 });
+
+test('the ledger row keeps the tags and entities the ledger stored', async () => {
+  const { plugin } = await load();
+  const rows = plugin.ledgerView([
+    { id: 'M-1', status: 'active', content: '项目使用 pnpm', type: 'fact', tags: ['tooling', 7, ''], entities: ['pnpm'] },
+    { id: 'M-2', status: 'active', content: '无结构' },
+    { id: 'M-3', status: 'active', content: '坏结构', tags: 'tooling' },
+  ]);
+  assert.deepEqual(rows[0].tags, ['tooling'], 'only real strings are shown, never coerced values');
+  assert.deepEqual(rows[0].entities, ['pnpm']);
+  assert.deepEqual(rows[1].tags, []);
+  assert.deepEqual(rows[1].entities, []);
+  assert.deepEqual(rows[2].tags, [], 'a field that is not a list is not presented as one');
+});
+
+test('a tag or entity can be found by typing it', async () => {
+  const { plugin } = await load();
+  const memories = [
+    { id: 'M-1', status: 'active', content: '项目使用 pnpm', tags: ['tooling'], entities: ['pnpm'] },
+    { id: 'M-2', status: 'active', content: '用户偏好中文', tags: [], entities: [] },
+  ];
+  assert.deepEqual(plugin.filterMemories(memories, { query: 'tooling' }).map((memory) => memory.id), ['M-1']);
+  assert.deepEqual(plugin.filterMemories(memories, { query: 'pnpm' }).map((memory) => memory.id), ['M-1']);
+  assert.deepEqual(plugin.filterMemories(memories, { query: '中文' }).map((memory) => memory.id), ['M-2']);
+});

@@ -1315,8 +1315,16 @@ window.__ModuleLoader__.load({
           changeId: memory && typeof memory.last_change_id === 'string' ? memory.last_change_id : null,
           version: memory && Number.isInteger(memory.version) ? memory.version : null,
           scope: memory && typeof memory.scope === 'string' ? memory.scope : null,
+          tags: memory && Array.isArray(memory.tags) ? memory.tags.filter((tag) => typeof tag === 'string' && tag !== '') : [],
+          entities: memory && Array.isArray(memory.entities) ? memory.entities.filter((entity) => typeof entity === 'string' && entity !== '') : [],
         };
       });
+    }
+
+    /** At most `limit` values plus a "+N" marker, so a row cannot grow without bound. */
+    function badgeValues(values, limit = 3) {
+      const list = Array.isArray(values) ? values : [];
+      return { shown: list.slice(0, limit), rest: Math.max(0, list.length - limit) };
     }
 
     /** Case-insensitive text match across the fields the UI actually has. */
@@ -1335,7 +1343,12 @@ window.__ModuleLoader__.load({
         if (type !== '' && memory.type !== type) return false;
         if (status !== '' && memory.status !== status) return false;
         if (query === '') return true;
-        return includesQuery(memory.content, query) || includesQuery(memory.text, query) || includesQuery(memory.id, query);
+        const joined = (value) => (Array.isArray(value) ? value.join(' ') : '');
+        return includesQuery(memory.content, query)
+          || includesQuery(memory.text, query)
+          || includesQuery(memory.id, query)
+          || includesQuery(joined(memory.tags), query)
+          || includesQuery(joined(memory.entities), query);
       });
     }
 
@@ -1900,11 +1913,21 @@ window.__ModuleLoader__.load({
           setNotice(t('objectFailed'));
         });
       };
+      const ledgerBadges = (values, className) => {
+        const { shown, rest } = badgeValues(values);
+        if (shown.length === 0) return null;
+        return [
+          ...shown.map((value) => h('span', { key: className + value, className }, value)),
+          rest > 0 ? h('span', { key: className + '-rest', className: 'dm-badge dm-badge-muted' }, '+' + rest) : null,
+        ];
+      };
       const ledgerItem = (row) => h('li', { key: row.id, className: 'dm-ledger-row' },
         h('div', { className: 'dm-ledger-line' },
           sourceKindLabel(row.sourceKind, t) === null ? null : h('span', { className: 'dm-badge dm-badge-muted' }, sourceKindLabel(row.sourceKind, t)),
           h('span', { className: 'dm-type dm-type-' + (row.type === 'constraint' ? 'constraint' : 'plain') }, row.type === null ? t('notProvided') : row.type),
-          h('span', { className: 'dm-muted' }, (row.active ? t('ledgerActive') : t('ledgerInactive')) + ' · ' + row.text)),
+          h('span', { className: 'dm-muted' }, (row.active ? t('ledgerActive') : t('ledgerInactive')) + ' · ' + row.text),
+          ledgerBadges(row.entities, 'dm-badge dm-badge-muted'),
+          ledgerBadges(row.tags.map((tag) => '#' + tag), 'dm-badge dm-badge-tag')),
         ledgerDraft && ledgerDraft.id === row.id
           ? h('form', {
             className: 'dm-ledger-edit',
