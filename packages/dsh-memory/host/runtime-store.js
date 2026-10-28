@@ -23,6 +23,45 @@ import { isCorrectionKind } from './corrections.js';
 
 export const RUNTIME_FILE = 'runtime.json';
 export const RUNTIME_VERSION = 1;
+
+/**
+ * §7.2 candidate statuses. A candidate is not "pending": it has been proposed,
+ * may be under validation, may be waiting for the user, may have been accepted
+ * by the user or by the policy, and may have ended as a conflict or no-change.
+ * The distinction is what makes the queue's audit trail honest.
+ */
+export const CANDIDATE_STATUSES = Object.freeze([
+  'proposed',
+  'validating',
+  'review_pending',
+  'auto_accepted',
+  'accepted_by_user',
+  'rejected',
+  'conflict',
+  'no_change',
+  'failed',
+]);
+
+/** Statuses that still need a decision, so the queue is still waiting. */
+export const OPEN_CANDIDATE_STATUSES = Object.freeze(['proposed', 'validating', 'review_pending', 'conflict']);
+
+/** Files written before §7.2 keep these values; read them without rewriting them. */
+export const LEGACY_CANDIDATE_STATUSES = Object.freeze({
+  pending: 'review_pending',
+  accepted: 'accepted_by_user',
+  rejected: 'rejected',
+});
+
+/** Read one stored status as the §7.2 value; unknown values are kept verbatim. */
+export function toCandidateStatus(status) {
+  if (typeof status !== 'string') return null;
+  if (CANDIDATE_STATUSES.includes(status)) return status;
+  return LEGACY_CANDIDATE_STATUSES[status] ?? status;
+}
+
+export function isOpenCandidateStatus(status) {
+  return OPEN_CANDIDATE_STATUSES.includes(toCandidateStatus(status));
+}
 export const MAX_INJECTIONS = 200;
 export const INJECTION_MAX_AGE_DAYS = 30;
 /**
@@ -91,7 +130,13 @@ export function createRuntimeStore(options = {}) {
     }
     return {
       version: RUNTIME_VERSION,
-      candidates: Array.isArray(parsed.candidates) ? parsed.candidates : [],
+      // Old files are read as the new vocabulary; the file is rewritten only
+      // when something is actually stored, never just because it was read.
+      candidates: Array.isArray(parsed.candidates)
+        ? parsed.candidates.map((entry) => (entry !== null && typeof entry === 'object'
+          ? { ...entry, status: toCandidateStatus(entry.status) ?? entry.status }
+          : entry))
+        : [],
       injections: Array.isArray(parsed.injections) ? parsed.injections : [],
       objections: Array.isArray(parsed.objections) ? parsed.objections : [],
     };
@@ -159,7 +204,7 @@ export function createRuntimeStore(options = {}) {
       const sourceRef = input.sourceRef && typeof input.sourceRef === 'object' ? input.sourceRef : null;
       if (sourceRef === null) throw new RuntimeStoreError('candidate needs evidence', 'no-evidence');
       return mutate((document) => {
-        const twin = document.candidates.find((entry) => normalise(entry.text) === normalise(text) && entry.status === 'pending');
+        const twin = document.candidates.find((entry) => normalise(entry.text) === normalise(text) && isOpenCandidateStatus(entry.status));
         if (twin) throw new RuntimeStoreError('an identical candidate is already pending', 'duplicate');
         const candidate = {
           id: candidateId(now()),
@@ -167,7 +212,7 @@ export function createRuntimeStore(options = {}) {
           // Stored in the ledger vocabulary so review cannot fail later on a
           // type the ledger refuses. An unsupported kind is kept as-is.
           type: (typeof input.type === 'string' ? toLedgerType(input.type) : null) ?? (typeof input.type === 'string' ? input.type : 'fact'),
-          status: 'pending',
+          status: 'proposed',
           session_id: sessionId,
           turn,
           source_refs: [sourceRef],
@@ -248,7 +293,7 @@ export function createRuntimeStore(options = {}) {
 
     /** Move a candidate to accepted / rejected / edited. The ledger write happens elsewhere. */
     async setCandidateStatus(id, status, meta = {}) {
-      if (!['pending', 'accepted', 'rejected'].includes(status)) {
+      if (!CANDIDATE_STATUSES.includes(status)) {
         throw new RuntimeStoreError(`unknown candidate status: ${status}`, 'invalid-status');
       }
       return mutate((document) => {
@@ -298,7 +343,7 @@ export function createRuntimeStore(options = {}) {
     /** Diagnostics for the panel: sizes without reading every record. */
     async summary() {
       const document = await read();
-      const pending = document.candidates.filter((entry) => entry.status === 'pending').length;
+      const pending = document.candidates.filter((entry) => isOpenCandidateStatus(entry.status)).length;
       const objected = document.objections.filter((entry) => entry !== null && typeof entry === 'object' && entry.status === 'active').length;
       return {
         candidates: document.candidates.length,

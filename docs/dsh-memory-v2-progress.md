@@ -1038,3 +1038,14 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `client.js`：自动记忆设置区（总开关 + 自动接受开关 + 说明），保存即写回 Host；i18n 中英各 7 条。
 - 测试：`settings.test.mjs` 5 项（默认值、缺文件、坏值回退记名、原子写入不留临时文件、可选项与账本类型一致）；`auto-memory.test.mjs` 6 项（关闭→REVIEW、总开关优先、用户白名单收窄、低置信/无证据/重复仍拦截、写入一次且幂等键正确、失败上抛）；`policy` +1（设置只能收窄）；`http-app` +2（设置路由读/写/403/415/400、候选策略随开关变化且策略不等于写入）；`client-panels` +1（开关只传布尔、不发多余字段）；`host.test` 路由契约 +1；完整套件 **309/309 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上的自动接受端到端（提取 → Policy → Writer → Git 提交 → 注入），需要新进程与真实对话；浏览器上开关的视觉与交互；`enabled=false` 对已排队候选的影响（只阻止新候选，不清空旧队列——这是有意的，未清空）。
+
+### 迭代 21（2026-10-28，阶段 §7.2：候选状态机）
+- 依据：`roadmap §7.2` 定义的九个候选状态（proposed / validating / review_pending / auto_accepted / accepted_by_user / rejected / conflict / no_change / failed）。此前运行时只有 `pending/accepted/rejected`：自动接受和用户接受都是 `accepted`，无法回答「谁批准了这条记忆」；冲突/无需变化/失败也无处表达。
+- 实现：
+  - `host/runtime-store.js`：导出 `CANDIDATE_STATUSES`、`OPEN_CANDIDATE_STATUSES`、`LEGACY_CANDIDATE_STATUSES`、`toCandidateStatus`、`isOpenCandidateStatus`；新候选写 `proposed`；`setCandidateStatus` 只接受新词汇（未知 → `invalid-status`）；同文候选去重改为「仍开放」判定；`summary.pending` 统计开放状态；**读取时**把旧值映射为新词汇，未知状态原样保留，不因读取而重写文件。
+  - `host/auto-memory.js`：自动写入标记 `auto_accepted`；新增 `candidateStatusForPolicy`（AUTO_ACCEPT→auto_accepted、CONFLICT→conflict、NO_CHANGE→no_change、REJECT→rejected、其余→review_pending）。
+  - `host/http-app.js`：`/review` 接受与合并写 `accepted_by_user`；`/candidates` 每行附 `open` 布尔（由 Host 判定，UI 不再自己猜哪些状态可操作）。
+  - `index.js`：提取阶段把策略结果落到候选状态（未自动接受时也写 `review_pending/conflict/no_change/rejected`，不再一律 `pending`）。
+  - `client.js`：九种状态的中英标签；徽标语气按状态；接受/拒绝按钮只在 `open === true` 时出现（依赖 Host 的判定，客户端不复制状态规则）。
+- 测试：`runtime-store` +1（旧文件三值映射 + 未知值原样保留 + 读取不重写 + 下次写入使用新词汇）；`auto-memory` +1（策略→状态映射，默认安全落到 review_pending）；`http-app` +1（新候选 proposed、open 为真；接受后 accepted_by_user、open 为假）；`client-panels` +1（九种标签、未知返回 null、open 透传）；既有断言更新为真实新状态；完整套件 **313/313 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上旧 `runtime.json` 的迁移表现（生产数据未触碰，仅测试夹具覆盖）；浏览器上状态徽标与按钮显隐；自动接受路径在真实对话中写入 `auto_accepted` 的端到端。

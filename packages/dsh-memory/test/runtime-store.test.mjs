@@ -22,7 +22,7 @@ test('a candidate survives a new store instance', async () => {
     const store = createRuntimeStore({ root });
     const added = await store.addCandidate({ text: '用户偏好中文回答', type: 'preference', sessionId: 'session-a', turn: 1, sourceRef: REF });
     assert.match(added.id, /^C-\d{8}-/);
-    assert.equal(added.status, 'pending');
+    assert.equal(added.status, 'proposed', 'a fresh candidate is proposed, not vaguely pending');
 
     const reopened = createRuntimeStore({ root });
     const candidates = await reopened.listCandidates();
@@ -65,12 +65,12 @@ test('reviewing a candidate records the outcome and the produced memory', async 
   await withRoot(async (root) => {
     const store = createRuntimeStore({ root });
     const candidate = await store.addCandidate({ text: '用户偏好中文回答', sessionId: 'session-a', turn: 1, sourceRef: REF });
-    const reviewed = await store.setCandidateStatus(candidate.id, 'accepted', { memoryId: 'M-1' });
-    assert.equal(reviewed.status, 'accepted');
+    const reviewed = await store.setCandidateStatus(candidate.id, 'accepted_by_user', { memoryId: 'M-1' });
+    assert.equal(reviewed.status, 'accepted_by_user');
     assert.equal(reviewed.memory_id, 'M-1');
     assert.equal(typeof reviewed.reviewed_at, 'string');
 
-    await assert.rejects(() => store.setCandidateStatus('C-nope', 'accepted'), (error) => {
+    await assert.rejects(() => store.setCandidateStatus('C-nope', 'accepted_by_user'), (error) => {
       assert.equal(error.code, 'missing');
       return true;
     });
@@ -85,7 +85,7 @@ test('an accepted candidate no longer blocks an identical new one', async () => 
   await withRoot(async (root) => {
     const store = createRuntimeStore({ root });
     const first = await store.addCandidate({ text: '同一句话', sourceRef: REF });
-    await store.setCandidateStatus(first.id, 'accepted', { memoryId: 'M-1' });
+    await store.setCandidateStatus(first.id, 'accepted_by_user', { memoryId: 'M-1' });
     const second = await store.addCandidate({ text: '同一句话', sourceRef: REF });
     assert.notEqual(second.id, first.id);
     assert.equal((await store.listCandidates()).length, 2);
@@ -254,5 +254,32 @@ test('an objection keeps its correction kind and refuses an unknown one', async 
     const reopened = createRuntimeStore({ root });
     const listed = await reopened.listObjections();
     assert.deepEqual(listed.map((entry) => entry.kind), ['too_broad', null]);
+  });
+});
+
+test('old runtime files are read as the §7.2 statuses and rewritten only on write', async () => {
+  await withRoot(async (root) => {
+    const legacy = {
+      version: 1,
+      candidates: [
+        { id: 'C-1', text: '旧待处理', type: 'fact', status: 'pending', source_refs: [REF], created_at: '2026-01-01T00:00:00.000Z' },
+        { id: 'C-2', text: '旧已接受', type: 'fact', status: 'accepted', source_refs: [REF], created_at: '2026-01-01T00:00:00.000Z' },
+        { id: 'C-3', text: '旧已拒绝', type: 'fact', status: 'rejected', source_refs: [REF], created_at: '2026-01-01T00:00:00.000Z' },
+        { id: 'C-4', text: '未来状态', type: 'fact', status: 'weird', source_refs: [REF], created_at: '2026-01-01T00:00:00.000Z' },
+      ],
+      injections: [],
+      objections: [],
+    };
+    await writeFile(join(root, 'runtime.json'), JSON.stringify(legacy), 'utf8');
+    const store = createRuntimeStore({ root });
+    const listed = await store.listCandidates();
+    assert.deepEqual(listed.map((entry) => entry.status), ['review_pending', 'accepted_by_user', 'rejected', 'weird'], 'unknown values are kept verbatim');
+
+    const withFile = JSON.parse(await readFile(join(root, 'runtime.json'), 'utf8'));
+    assert.equal(withFile.candidates[0].status, 'pending', 'reading does not rewrite the file');
+
+    await store.setCandidateStatus('C-1', 'review_pending');
+    const rewritten = JSON.parse(await readFile(join(root, 'runtime.json'), 'utf8'));
+    assert.equal(rewritten.candidates[0].status, 'review_pending', 'the next write stores the new vocabulary');
   });
 });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { decideAutoMemory, writeAutoAccepted } from '../host/auto-memory.js';
+import { candidateStatusForPolicy, decideAutoMemory, writeAutoAccepted } from '../host/auto-memory.js';
 
 const SETTINGS_ON = { enabled: true, autoAccept: true, autoAcceptTypes: ['fact', 'preference', 'constraint'] };
 const SETTINGS_OFF = { enabled: true, autoAccept: false, autoAcceptTypes: ['fact', 'preference', 'constraint'] };
@@ -72,11 +72,20 @@ test('an auto-accepted candidate is written once, through the single writer', as
     sourceRefs: [{ session_id: 's1', event_seq: 2 }],
     idempotencyKey: 'auto:C-1',
   });
-  assert.deepEqual(statuses, [{ id: 'C-1', status: 'accepted', extra: { memoryId: 'M-9' } }]);
+  assert.deepEqual(statuses, [{ id: 'C-1', status: 'auto_accepted', extra: { memoryId: 'M-9' } }]);
 });
 
 test('a failing write surfaces instead of claiming success', async () => {
   const service = { async add() { throw new Error('ledger busy'); } };
   const runtime = { async setCandidateStatus() { throw new Error('must not be called'); } };
   await assert.rejects(() => writeAutoAccepted({ service, runtime, candidate: candidate() }), /ledger busy/);
+});
+
+test('the policy decision maps to an honest candidate status', () => {
+  assert.equal(candidateStatusForPolicy('AUTO_ACCEPT'), 'auto_accepted');
+  assert.equal(candidateStatusForPolicy('CONFLICT'), 'conflict');
+  assert.equal(candidateStatusForPolicy('NO_CHANGE'), 'no_change');
+  assert.equal(candidateStatusForPolicy('REJECT'), 'rejected');
+  assert.equal(candidateStatusForPolicy('REVIEW_REQUIRED'), 'review_pending');
+  assert.equal(candidateStatusForPolicy('something-else'), 'review_pending', 'the safe default keeps it in the queue');
 });

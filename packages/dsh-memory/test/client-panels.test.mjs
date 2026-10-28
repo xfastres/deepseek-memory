@@ -622,3 +622,20 @@ test('the settings switches travel as booleans and nothing else', async () => {
     assert.notEqual(t(key), key, 'missing zh text for ' + key);
   }
 });
+
+test('candidate statuses are named, and the queue action follows the Host flag', async () => {
+  const { plugin, t } = await load();
+  assert.equal(plugin.candidateStatusLabel('proposed', t), '已提出');
+  assert.equal(plugin.candidateStatusLabel('review_pending', t), '待复核');
+  assert.equal(plugin.candidateStatusLabel('auto_accepted', t), '自动接受');
+  assert.equal(plugin.candidateStatusLabel('accepted_by_user', t), '用户接受');
+  assert.equal(plugin.candidateStatusLabel('no_change', t), '无需变化');
+  assert.equal(plugin.candidateStatusLabel('mystery', t), null);
+
+  const view = plugin.hostCandidateView({ candidates: [
+    { id: 'C-1', text: 'a', status: 'review_pending', open: true },
+    { id: 'C-2', text: 'b', status: 'auto_accepted', open: false },
+  ] });
+  assert.equal(view.rows[0].open, true);
+  assert.equal(view.rows[1].open, false);
+});

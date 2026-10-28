@@ -15,6 +15,7 @@ import { evaluateCandidatePolicies } from './policy.js';
 import { toLedgerType } from './memory-types.js';
 import { CORRECTION_KINDS } from './corrections.js';
 import { AUTO_ACCEPT_TYPE_CHOICES, loadSettings, writeSettings } from './settings.js';
+import { isOpenCandidateStatus } from './runtime-store.js';
 
 import { createLedgerService, toApiError } from './ledger-service.js';
 import { applyMigration, planMemoryMigration } from './migration.js';
@@ -329,7 +330,7 @@ export function createMemoryApp(options = {}) {
               autoAccept: loadedSettings.settings.enabled === true && loadedSettings.settings.autoAccept === true,
               autoAcceptTypes: loadedSettings.settings.autoAcceptTypes,
             },
-          ),
+          ).map((row) => ({ ...row, open: isOpenCandidateStatus(row.status) })),
           summary: await runtime.summary(),
         });
       } catch (error) {
@@ -402,7 +403,7 @@ export function createMemoryApp(options = {}) {
             sourceRefs: candidate.source_refs,
             idempotencyKey: `candidate:${candidate.id}`,
           });
-          const reviewed = await runtime.setCandidateStatus(candidate.id, 'accepted', { memoryId: result.memory ? result.memory.id : undefined });
+          const reviewed = await runtime.setCandidateStatus(candidate.id, 'accepted_by_user', { memoryId: result.memory ? result.memory.id : undefined });
           writeJson(res, 200, { ok: true, status: result.status, memory: result.memory, candidate: reviewed });
           return;
         }
@@ -415,7 +416,7 @@ export function createMemoryApp(options = {}) {
             content,
             expectedBaseChangeId: typeof body.expectedBaseChangeId === 'string' ? body.expectedBaseChangeId : null,
           });
-          const reviewed = await runtime.setCandidateStatus(candidate.id, 'accepted', { memoryId: body.targetId, content });
+          const reviewed = await runtime.setCandidateStatus(candidate.id, 'accepted_by_user', { memoryId: body.targetId, content });
           writeJson(res, 200, { ok: true, memory: result.memory, candidate: reviewed });
           return;
         }

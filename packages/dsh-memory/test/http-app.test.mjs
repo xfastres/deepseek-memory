@@ -254,7 +254,7 @@ test('a candidate is queued, then accepted into the ledger with its own evidence
       body: { text: '用户偏好中文回答', type: 'preference', sessionId: 's1', turn: 1, origin: 'user' },
     });
     assert.equal(queued.status, 200);
-    assert.equal(queued.json.candidate.status, 'pending');
+    assert.equal(queued.json.candidate.status, 'proposed', 'a new candidate is proposed');
     assert.equal(queued.json.candidate.origin, 'user', 'the declared origin is kept');
     assert.equal(queued.json.candidate.source_refs[0].event_seq, 2);
 
@@ -270,7 +270,7 @@ test('a candidate is queued, then accepted into the ledger with its own evidence
     assert.equal(accepted.status, 200);
     assert.equal(accepted.json.status, 'committed');
     assert.equal(accepted.json.memory.content, '用户偏好中文回答');
-    assert.equal(accepted.json.candidate.status, 'accepted');
+    assert.equal(accepted.json.candidate.status, 'accepted_by_user');
 
     const state = await call(app, '/api/dsh-memory/state');
     assert.equal(state.json.memories.length, 1);
@@ -561,7 +561,7 @@ test('accepting a candidate whose type the ledger cannot store is refused with a
     assert.equal(refused.json.candidateType, 'gossip');
 
     const list = await call(app, '/api/dsh-memory/candidates');
-    assert.equal(list.json.candidates[0].status, 'pending', 'a refused candidate stays pending');
+    assert.equal(list.json.candidates[0].status, 'proposed', 'a refused candidate stays open');
     const state = await call(app, '/api/dsh-memory/state');
     assert.equal(state.json.memories.length, 0);
   });
@@ -746,5 +746,33 @@ test('the candidate policy follows the switches the user saved', async () => {
 
     const state = await call(app, '/api/dsh-memory/state');
     assert.equal(state.json.memories.length, 0, 'a policy decision is not a write');
+  });
+});
+
+test('the queue carries the §7.2 status and whether it still needs a decision', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const queued = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '项目使用 pnpm', type: 'fact', confidence: 0.9, sessionId: 's1', turn: 1 },
+    });
+    assert.equal(queued.json.candidate.status, 'proposed');
+    const open = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(open.json.candidates[0].open, true);
+
+    const accepted = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { candidateId: queued.json.candidate.id, action: 'accept' },
+    });
+    assert.equal(accepted.status, 200);
+    const closed = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(closed.json.candidates[0].status, 'accepted_by_user');
+    assert.equal(closed.json.candidates[0].open, false);
   });
 });

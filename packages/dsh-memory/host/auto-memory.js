@@ -13,6 +13,15 @@ import { classifyCandidate } from './classification.js';
 import { evaluateCandidatePolicy } from './policy.js';
 
 /** Decide what should happen to one freshly extracted candidate. */
+/** The candidate status a policy decision leaves behind. */
+export function candidateStatusForPolicy(decision) {
+  if (decision === 'AUTO_ACCEPT') return 'auto_accepted';
+  if (decision === 'CONFLICT') return 'conflict';
+  if (decision === 'NO_CHANGE') return 'no_change';
+  if (decision === 'REJECT') return 'rejected';
+  return 'review_pending';
+}
+
 export function decideAutoMemory({ candidate, memories, settings }) {
   const classification = classifyCandidate(candidate, memories);
   const refs = candidate !== null && typeof candidate === 'object' && Array.isArray(candidate.source_refs)
@@ -45,6 +54,6 @@ export async function writeAutoAccepted({ service, runtime, candidate }) {
   const memoryId = result !== null && typeof result === 'object' && result.memory !== null && typeof result.memory === 'object'
     ? result.memory.id
     : undefined;
-  await runtime.setCandidateStatus(candidate.id, 'accepted', typeof memoryId === 'string' ? { memoryId } : {});
+  await runtime.setCandidateStatus(candidate.id, 'auto_accepted', typeof memoryId === 'string' ? { memoryId } : {});
   return result;
 }

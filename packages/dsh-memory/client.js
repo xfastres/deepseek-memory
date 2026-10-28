@@ -57,6 +57,8 @@ window.__ModuleLoader__.load({
       sourceKindUserExplicit: '用户明确', sourceKindUserCorrection: '用户纠正', sourceKindSessionExtraction: '会话提取', sourceKindAgentInference: '模型推断',
       decisionNew: '新增', decisionDuplicate: '与现有记忆相同', decisionConflict: '需与现有记忆合并', decisionTarget: '参照 {id}',
       object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reinstate: '恢复使用', objectKind: '问题类型',
+      candidateProposed: '已提出', candidateValidating: '校验中', candidateReviewPending: '待复核', candidateAutoAccepted: '自动接受',
+      candidateAcceptedByUser: '用户接受', candidateRejected: '已拒绝', candidateConflict: '冲突', candidateNoChange: '无需变化', candidateFailed: '失败',
       settingsTitle: '自动记忆设置', settingsOn: '允许自动提取候选（总开关）', settingsAutoAccept: '允许低风险候选自动写入（默认关闭）',
       settingsSave: '保存设置', settingsSaved: '设置已保存。', settingsFailed: '设置保存失败，请重试。', settingsHint: '自动接受只影响证据充分、无冲突、非敏感的事实/偏好/约束；随时可关闭。',
       kindWrong: '错误', kindTooBroad: '太宽泛', kindOutdated: '过期', kindMissingContext: '缺少上下文',
@@ -130,6 +132,8 @@ window.__ModuleLoader__.load({
       sourceKindUserExplicit: 'stated by user', sourceKindUserCorrection: 'user correction', sourceKindSessionExtraction: 'session extraction', sourceKindAgentInference: 'agent inference',
       decisionNew: 'new', decisionDuplicate: 'same as an existing memory', decisionConflict: 'needs merging with an existing memory', decisionTarget: 'refers to {id}',
       object: 'mark wrong', objectConfirm: 'confirm: mark wrong', objected: 'suppressed', reinstate: 'restore', objectKind: 'problem',
+      candidateProposed: 'proposed', candidateValidating: 'validating', candidateReviewPending: 'needs review', candidateAutoAccepted: 'auto-accepted',
+      candidateAcceptedByUser: 'accepted by the user', candidateRejected: 'rejected', candidateConflict: 'conflict', candidateNoChange: 'no change needed', candidateFailed: 'failed',
       settingsTitle: 'Automatic memory', settingsOn: 'queue extracted candidates (master switch)', settingsAutoAccept: 'write low-risk candidates without review (off by default)',
       settingsSave: 'Save settings', settingsSaved: 'Settings saved.', settingsFailed: 'Could not save the settings. Try again.', settingsHint: 'Auto-accept only covers evidenced, non-conflicting, non-sensitive facts, preferences and constraints. It can be switched off at any time.',
       kindWrong: 'wrong', kindTooBroad: 'too broad', kindOutdated: 'outdated', kindMissingContext: 'missing context',
@@ -1098,6 +1102,20 @@ window.__ModuleLoader__.load({
       return out;
     }
 
+    /** A candidate status in words; an unknown status is shown verbatim. */
+    function candidateStatusLabel(status, t) {
+      if (status === 'proposed') return t('candidateProposed');
+      if (status === 'validating') return t('candidateValidating');
+      if (status === 'review_pending') return t('candidateReviewPending');
+      if (status === 'auto_accepted') return t('candidateAutoAccepted');
+      if (status === 'accepted_by_user') return t('candidateAcceptedByUser');
+      if (status === 'rejected') return t('candidateRejected');
+      if (status === 'conflict') return t('candidateConflict');
+      if (status === 'no_change') return t('candidateNoChange');
+      if (status === 'failed') return t('candidateFailed');
+      return null;
+    }
+
     /** A correction kind in words; unknown or absent stays silent. */
     function correctionLabel(kind, t) {
       if (kind === 'wrong') return t('kindWrong');
@@ -1204,6 +1222,7 @@ window.__ModuleLoader__.load({
             text: typeof source.text === 'string' ? source.text : '',
             type: typeof source.type === 'string' ? source.type : null,
             status: typeof source.status === 'string' ? source.status : null,
+            open: source.open === true,
             reason: typeof source.reason === 'string' ? source.reason : '',
             origin: typeof source.origin === 'string' ? source.origin : null,
             decision: classification && typeof classification.decision === 'string' ? classification.decision : null,
@@ -1848,7 +1867,7 @@ window.__ModuleLoader__.load({
       };
       const hostQueueItem = (row) => h('li', { key: row.id, className: 'dm-host-queue-row' },
         h('span', { className: 'dm-type dm-type-' + (row.type === 'constraint' ? 'constraint' : 'plain') }, row.type === null ? t('notProvided') : row.type),
-        h('span', { className: 'dm-badge dm-badge-' + (row.status === 'pending' ? 'pending' : row.status === 'accepted' ? 'ok' : 'muted') }, row.status === null ? t('notProvided') : row.status),
+        h('span', { className: 'dm-badge dm-badge-' + (row.open === true ? 'pending' : row.status === 'auto_accepted' || row.status === 'accepted_by_user' ? 'ok' : row.status === 'rejected' || row.status === 'failed' ? 'bad' : 'muted') }, row.status === null ? t('notProvided') : (candidateStatusLabel(row.status, t) === null ? row.status : candidateStatusLabel(row.status, t))),
         h('span', { className: 'dm-muted' }, row.text),
         row.reason === '' ? null : h('span', { className: 'dm-muted' }, row.reason),
         originLabel(row.origin, t) === null ? null : h('span', { className: 'dm-badge dm-badge-muted' }, t('origin') + ' · ' + originLabel(row.origin, t)),
@@ -1857,7 +1876,7 @@ window.__ModuleLoader__.load({
         policyLabel(row.policy, t) === null ? null : h('span', { className: 'dm-badge dm-badge-' + (row.policy.decision === 'AUTO_ACCEPT' ? 'ok' : row.policy.decision === 'REJECT' ? 'bad' : 'muted') },
           t('policy') + ' · ' + policyLabel(row.policy, t)),
         ledgerEvidenceButton({ refs: row.refs }, t, openEvidence),
-        row.status === 'pending'
+        row.open === true
           ? h('span', { className: 'dm-host-queue-actions' },
             h('button', { type: 'button', className: 'dm-link', disabled: queuePending === row.id, onClick: () => reviewHostCandidate(row, 'accept') }, t('accept')),
             h('button', { type: 'button', className: 'dm-link dm-danger', disabled: queuePending === row.id, onClick: () => reviewHostCandidate(row, 'reject') }, t('reject')))
@@ -2327,6 +2346,7 @@ window.__ModuleLoader__.load({
       hostLine,
       changeView,
       correctionLabel,
+      candidateStatusLabel,
       decisionLabel,
       policyLabel,
       originLabel,

@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 候选状态（§7.2）：`proposed` → `validating` → `review_pending`；终态为 `auto_accepted`（策略自动写入）、`accepted_by_user`（用户接受/合并）、`rejected`、`conflict`、`no_change`、`failed`。`/candidates` 的每一行额外返回 `open`（仍需决定：`proposed`/`validating`/`review_pending`/`conflict`）。旧 `runtime.json` 里的 `pending`/`accepted`/`rejected` 在**读取时**映射为 `review_pending`/`accepted_by_user`/`rejected`，未知值原样保留；文件只在下一次写入时才改写。
+
 > 自动记忆设置（§10.1.6）：
 > - `GET /settings` → `{ ok, settings: { version, enabled, autoAccept, autoAcceptTypes }, loaded, fallback, choices: { autoAcceptTypes } }`；设置存于 `memory-settings.json`，不是记忆，绝不进入账本与版本历史。
 > - `POST /settings { enabled?, autoAccept?, autoAcceptTypes? }` → 只改传入的字段；类型错误返回 `400 invalid-settings {field}`；未知类型被丢弃并记入 `fallback`（设置只能把自动接受收窄到 `fact/preference/constraint` 的子集，不能扩大）。

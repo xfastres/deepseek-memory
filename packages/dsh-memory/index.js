@@ -26,7 +26,7 @@ import {
 import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
 import { loadConfig, resolveConstraints } from './host/constraints.js';
 import { extractCandidates } from './host/extraction.js';
-import { decideAutoMemory, writeAutoAccepted } from './host/auto-memory.js';
+import { candidateStatusForPolicy, decideAutoMemory, writeAutoAccepted } from './host/auto-memory.js';
 
 export { API_PREFIX, isTrustedWrite, writeJson };
 
@@ -385,7 +385,10 @@ export function apply(ctx) {
               sourceRef: ref,
             })).then((candidate) => {
               const decided = decideAutoMemory({ candidate, memories, settings });
-              if (decided.policy.decision !== 'AUTO_ACCEPT') return undefined;
+              if (decided.policy.decision !== 'AUTO_ACCEPT') {
+                // The queue says what the policy decided, not just "pending".
+                return Promise.resolve(app.runtime.setCandidateStatus(candidate.id, candidateStatusForPolicy(decided.policy.decision))).catch(() => undefined);
+              }
               // A failed auto-write leaves the candidate pending for review.
               return writeAutoAccepted({ service: app.service, runtime: app.runtime, candidate }).catch(() => undefined);
             }).catch(() => undefined)));
