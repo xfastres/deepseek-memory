@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  contentQuality,
   eligibility,
   formatInjection,
   grams,
@@ -137,4 +138,21 @@ test('scoring keeps the parts so the number can be shown as a reason', () => {
   assert.equal(typeof scored.parts.lexical, 'number');
   assert.ok(scored.parts.hits.includes('合并'));
   assert.ok(scored.parts.recency > 0.9);
+});
+
+test('placeholder content never reaches a prompt', () => {
+  assert.equal(contentQuality('快快快'), 'too-short');
+  assert.equal(contentQuality('啊'), 'too-short');
+  assert.equal(contentQuality('哈哈哈哈啊哈哈'), 'repetitive');
+  assert.equal(contentQuality('回答要简洁'), null, 'a short real preference is fine');
+  assert.equal(contentQuality('项目用 pnpm 而不是 npm'), null);
+  assert.equal(contentQuality(''), 'too-short');
+  assert.equal(contentQuality(null), 'too-short');
+});
+
+test('eligibility names the quality problem instead of silently dropping it', () => {
+  const junk = { id: 'M-1', status: 'active', scope: 'global', content: '哈哈哈哈啊哈哈' };
+  assert.equal(eligibility(junk, { now: new Date('2026-10-28T08:00:00.000Z') }), 'repetitive');
+  const short = { id: 'M-2', status: 'active', scope: 'global', content: '快快快' };
+  assert.equal(eligibility(short, { now: new Date('2026-10-28T08:00:00.000Z') }), 'too-short');
 });

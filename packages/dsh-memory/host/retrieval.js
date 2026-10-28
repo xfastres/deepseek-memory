@@ -98,11 +98,32 @@ function isExpired(memory, now) {
   return !Number.isNaN(end) && end <= now.getTime();
 }
 
+/**
+ * Is this content worth remembering at all?
+ *
+ * A memory reaches every later turn, so a placeholder that slipped in during
+ * testing costs more than a missing memory does. Two shapes are refused: a
+ * fragment too short to carry a claim, and a repetition whose distinct
+ * characters are too few to mean anything ("哈哈哈哈").
+ */
+export const MIN_CONTENT_LENGTH = 4;
+
+export function contentQuality(text) {
+  const value = String(text ?? '').trim();
+  if (value.length < MIN_CONTENT_LENGTH) return 'too-short';
+  const compact = value.replace(/\s+/gu, '');
+  const distinct = new Set(Array.from(compact)).size;
+  if (compact.length > 0 && distinct / compact.length < 0.4 && compact.length < 12) return 'repetitive';
+  return null;
+}
+
 /** Which memories may even be considered. Everything excluded has a reason. */
 export function eligibility(memory, { now = new Date(), scope = 'global', includePrivate = false } = {}) {
   if (memory.status !== 'active') return 'not-active';
   if (isExpired(memory, now)) return 'expired';
   if (memory.sensitivity === 'private' && !includePrivate) return 'private';
+  const quality = contentQuality(memory.content);
+  if (quality !== null) return quality;
   const memoryScope = memory.scope ?? 'global';
   if (memoryScope !== 'global' && memoryScope !== scope) return 'other-scope';
   return null;
