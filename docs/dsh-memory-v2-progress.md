@@ -931,3 +931,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：`createHostClient` 增加 `candidates()` / `candidate()` / `review()`（只为后续把评审切到 Writer 做准备，本轮**不改变**任何评审行为）；新增 `hostCandidateView` 归一化（缺字段保持 null/空串，不伪造）；Host 在线时展示"Host 候选队列（只读）"，明确标注"评审动作仍写入本地存储"，并提供与队列条目对应的原始证据入口；Host 离线时给出可理解提示。
 - 测试：`client-panels` +1（18 项，覆盖 GET 路径、POST 路径/方法/请求体、stale 映射、队列归一化与空输入）；完整套件 **246/246 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上队列内容与界面渲染；浏览器视觉；跨进程锁；对生产数据零写入。
+
+### 迭代 9（2026-10-28，L1 / 阶段 2.4：Host 候选可经单一 Writer 评审）
+- 依据：roadmap 阶段 2.4"界面操作统一走 Host API"、D5（提取与写入分离）、D8（用户修改统一走 Writer）、D9（授权操作仅用户执行）。
+- 契约核对（未新增路由/字段）：`POST /review` 支持 `{candidateId, action: reject|accept|merge, content?, targetId?, expectedBaseChangeId?}`；accept 走 `service.add` 且以 `candidate:<id>` 作幂等键；reject 仅 `setCandidateStatus('rejected')`；错误码沿用 `runtimeFail`/`toApiError`。
+- 改动：Host 队列行新增"接受/拒绝"按钮（仅 `status === 'pending'` 显示），经 `createHostClient.review` 提交；成功后重新读取队列与 `/state`，**不写本地正式记忆**；失败按 reason 显示"候选操作未完成：{reason}"；队列提示文案改为如实说明"接受经 Host Writer 写入 Git 账本，拒绝只改变运行时候选状态"（本地候选区仍是浏览器存储，未改动其行为）。
+- 测试：`client-panels` +1（19 项，覆盖 reject/accept 请求体不含多余字段、文案与失败模板）；完整套件 **247/247 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上的接受/拒绝点击与账本变化；浏览器视觉；本地候选与 Host 队列并存的迁移路径（阶段 2.5）仍待处理。

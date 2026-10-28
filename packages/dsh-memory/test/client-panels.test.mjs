@@ -369,3 +369,22 @@ test('the host candidate contract is read and written without inventing fields',
   const stale = plugin.createHostClient(async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ ok: false, error: 'stale' }) }));
   await assert.rejects(() => stale.review({ candidateId: 'C-1', action: 'merge', targetId: 'M-1', content: 'x' }), (error) => error.reason === 'stale');
 });
+
+test('host queue reviews name the candidate and never invent a target', async () => {
+  const { plugin, t } = await load();
+  const calls = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, candidate: { id: 'C-1', status: 'rejected' } }) };
+  });
+  await client.review({ candidateId: 'C-1', action: 'reject' });
+  assert.equal(calls[0].url, 'api/dsh-memory/review');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { candidateId: 'C-1', action: 'reject' });
+
+  await client.review({ candidateId: 'C-1', action: 'accept' });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { candidateId: 'C-1', action: 'accept' });
+
+  assert.equal(t('hostCandidateAccepted'), '已接受候选，记忆已写入账本。');
+  assert.equal(t('hostCandidateRejected'), '已拒绝该候选。');
+  assert.match(t('hostCandidateFailed').replace('{reason}', 'stale'), /stale/u);
+});
