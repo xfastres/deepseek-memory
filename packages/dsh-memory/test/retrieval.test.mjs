@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  MAX_MEMORY_CHARS,
+  clipContent,
   contentQuality,
   eligibility,
   formatInjection,
@@ -155,4 +157,25 @@ test('eligibility names the quality problem instead of silently dropping it', ()
   assert.equal(eligibility(junk, { now: new Date('2026-10-28T08:00:00.000Z') }), 'repetitive');
   const short = { id: 'M-2', status: 'active', scope: 'global', content: '快快快' };
   assert.equal(eligibility(short, { now: new Date('2026-10-28T08:00:00.000Z') }), 'too-short');
+});
+
+test('a long memory is clipped and still injected instead of dropped', () => {
+  const long = { id: 'M-long', status: 'active', scope: 'global', type: 'instruction', content: '项目规则 '.repeat(200), accepted_at: '2026-10-28T00:00:00.000Z' };
+  const result = selectMemories([long], '', { now: new Date('2026-10-28T08:00:00.000Z'), budget: 1200 });
+  assert.equal(result.chosen.length, 1, 'the only real memory must reach the prompt');
+  assert.equal(result.chosen[0].clipped, true);
+  assert.equal(result.chosen[0].text.length, MAX_MEMORY_CHARS + '…（以下内容已截断）'.length);
+  assert.match(formatInjection(result.chosen), /已截断/u, 'the cut is visible to the model');
+});
+
+test('a short memory is never marked as clipped', () => {
+  const short = { id: 'M-short', status: 'active', scope: 'global', type: 'fact', content: '项目用 pnpm', accepted_at: '2026-10-28T00:00:00.000Z' };
+  const result = selectMemories([short], '项目用 pnpm', { now: new Date('2026-10-28T08:00:00.000Z'), budget: 1200 });
+  assert.equal(result.chosen[0].clipped, false);
+  assert.equal(result.chosen[0].text, '项目用 pnpm');
+});
+
+test('clipContent says what it did', () => {
+  assert.equal(clipContent('abc', 10), 'abc');
+  assert.match(clipContent('abcdef', 3), /^abc…/u);
 });

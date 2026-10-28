@@ -200,16 +200,38 @@ export function selectMemories(memories, query, options = {}) {
       excluded.push({ id: entry.memory.id, reason: 'over-limit' });
       continue;
     }
-    const length = String(entry.memory.content ?? '').length;
     const isPinned = entry.score.parts.pinned;
-    if (!isPinned && used + length > budget) {
+    const full = String(entry.memory.content ?? '').replace(/\s+/g, ' ').trim();
+    const cost = Math.min(full.length, MAX_MEMORY_CHARS);
+    if (!isPinned && used + cost > budget) {
       excluded.push({ id: entry.memory.id, reason: 'over-budget' });
       continue;
     }
-    used += length;
-    chosen.push({ ...entry, reason: explain(entry, hasQuery) });
+    used += cost;
+    chosen.push({
+      ...entry,
+      text: clipContent(full, MAX_MEMORY_CHARS),
+      clipped: full.length > MAX_MEMORY_CHARS,
+      reason: explain(entry, hasQuery),
+    });
   }
   return { chosen, excluded, used, budget };
+}
+
+/**
+ * How much of one memory may enter a prompt.
+ *
+ * A long document is still worth something, and dropping it entirely means the
+ * only real memory in the store never reaches a single turn. The cut is marked
+ * so the model knows the text is partial instead of reading a truncated rule as
+ * the whole rule.
+ */
+export const MAX_MEMORY_CHARS = 400;
+
+export function clipContent(text, limit = MAX_MEMORY_CHARS) {
+  const value = String(text ?? '');
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}…（以下内容已截断）`;
 }
 
 /** One short, human-readable reason. Never empty, never a bare number. */
@@ -234,7 +256,8 @@ export function formatInjection(chosen, { header = '以下是用户已确认的�
   const lines = [header];
   chosen.forEach((entry, index) => {
     const scope = entry.memory.scope && entry.memory.scope !== 'global' ? `（范围：${entry.memory.scope}）` : '';
-    lines.push(`${index + 1}. ${String(entry.memory.content).replace(/\s+/g, ' ').trim()}${scope}`);
+    const body = typeof entry.text === 'string' ? entry.text : String(entry.memory.content).replace(/\s+/g, ' ').trim();
+    lines.push(`${index + 1}. ${body}${scope}`);
   });
   return lines.join('\n');
 }
