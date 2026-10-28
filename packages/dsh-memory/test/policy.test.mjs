@@ -67,3 +67,15 @@ test('the queue is annotated without changing its rows', () => {
   assert.deepEqual(rows[1].policy, { decision: 'REJECT', reasons: ['no-evidence'] });
   assert.deepEqual(evaluateCandidatePolicies(undefined), []);
 });
+
+test('the user allow-list narrows which types may be auto-accepted', () => {
+  const base = { classification: { decision: 'ADD' }, confidence: 0.9, hasEvidence: true, autoAccept: true };
+  assert.equal(evaluateCandidatePolicy({ ...base, type: 'fact', autoAcceptTypes: ['fact'] }).decision, 'AUTO_ACCEPT');
+  assert.deepEqual(evaluateCandidatePolicy({ ...base, type: 'preference', autoAcceptTypes: ['fact'] }).reasons, ['type-not-auto']);
+  assert.deepEqual(evaluateCandidatePolicy({ ...base, type: 'fact', autoAcceptTypes: [] }).reasons, ['type-not-auto']);
+  assert.deepEqual(
+    evaluateCandidatePolicy({ ...base, type: 'fact', autoAcceptTypes: ['goal'] }).reasons,
+    ['type-not-auto'],
+    'a list naming only review-only types allows nothing; settings can narrow, never widen',
+  );
+});

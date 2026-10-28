@@ -57,6 +57,8 @@ window.__ModuleLoader__.load({
       sourceKindUserExplicit: '用户明确', sourceKindUserCorrection: '用户纠正', sourceKindSessionExtraction: '会话提取', sourceKindAgentInference: '模型推断',
       decisionNew: '新增', decisionDuplicate: '与现有记忆相同', decisionConflict: '需与现有记忆合并', decisionTarget: '参照 {id}',
       object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reinstate: '恢复使用', objectKind: '问题类型',
+      settingsTitle: '自动记忆设置', settingsOn: '允许自动提取候选（总开关）', settingsAutoAccept: '允许低风险候选自动写入（默认关闭）',
+      settingsSave: '保存设置', settingsSaved: '设置已保存。', settingsFailed: '设置保存失败，请重试。', settingsHint: '自动接受只影响证据充分、无冲突、非敏感的事实/偏好/约束；随时可关闭。',
       kindWrong: '错误', kindTooBroad: '太宽泛', kindOutdated: '过期', kindMissingContext: '缺少上下文',
       kindWrongScope: '范围错误', kindDuplicate: '重复', kindShouldNotSave: '不应保存', kindDelete: '删除',
       objectedDone: '已标记有误：这条记忆会立即退出检索与注入，账本内容不变。', objectFailed: '标记失败，请重试。', reinstateDone: '已恢复使用。',
@@ -128,6 +130,8 @@ window.__ModuleLoader__.load({
       sourceKindUserExplicit: 'stated by user', sourceKindUserCorrection: 'user correction', sourceKindSessionExtraction: 'session extraction', sourceKindAgentInference: 'agent inference',
       decisionNew: 'new', decisionDuplicate: 'same as an existing memory', decisionConflict: 'needs merging with an existing memory', decisionTarget: 'refers to {id}',
       object: 'mark wrong', objectConfirm: 'confirm: mark wrong', objected: 'suppressed', reinstate: 'restore', objectKind: 'problem',
+      settingsTitle: 'Automatic memory', settingsOn: 'queue extracted candidates (master switch)', settingsAutoAccept: 'write low-risk candidates without review (off by default)',
+      settingsSave: 'Save settings', settingsSaved: 'Settings saved.', settingsFailed: 'Could not save the settings. Try again.', settingsHint: 'Auto-accept only covers evidenced, non-conflicting, non-sensitive facts, preferences and constraints. It can be switched off at any time.',
       kindWrong: 'wrong', kindTooBroad: 'too broad', kindOutdated: 'outdated', kindMissingContext: 'missing context',
       kindWrongScope: 'wrong scope', kindDuplicate: 'duplicate', kindShouldNotSave: 'should not be saved', kindDelete: 'delete',
       objectedDone: 'Marked wrong: this memory leaves retrieval and injection now; the ledger is unchanged.', objectFailed: 'Could not record the objection. Try again.', reinstateDone: 'Restored.',
@@ -1016,6 +1020,18 @@ window.__ModuleLoader__.load({
           return post('/review', payload);
         },
         /** Version timeline of one memory. Read-only, like /state. */
+        /** The automatic-memory switches, as the Host has them. */
+        async settings() {
+          return get('/settings');
+        },
+        /** Change only the switches named here; the Host owns the rest. */
+        async saveSettings({ enabled, autoAccept, autoAcceptTypes }) {
+          const body = {};
+          if (typeof enabled === 'boolean') body.enabled = enabled;
+          if (typeof autoAccept === 'boolean') body.autoAccept = autoAccept;
+          if (Array.isArray(autoAcceptTypes)) body.autoAcceptTypes = autoAcceptTypes;
+          return post('/settings', body);
+        },
         /** The runtime objections, and which memory ids they currently suppress. */
         async objections() {
           return get('/objections');
@@ -1464,6 +1480,36 @@ window.__ModuleLoader__.load({
       const [objections, setObjections] = useState({ status: 'idle', rows: [], suppressed: [], kinds: [] });
       const [objectionKind, setObjectionKind] = useState('wrong');
       const [objectingId, setObjectingId] = useState(null);
+      /** The Host's automatic-memory switches; never assumed, always read. */
+      const [hostSettings, setHostSettings] = useState({ status: 'idle', settings: null, error: null });
+      const loadHostSettings = () => {
+        if (typeof fetch !== 'function') {
+          setHostSettings({ status: 'idle', settings: null, error: null });
+          return;
+        }
+        createHostClient(fetch).settings().then((data) => {
+          setHostSettings({
+            status: 'ready',
+            settings: data && typeof data === 'object' && data.settings && typeof data.settings === 'object'
+              ? { enabled: data.settings.enabled === true, autoAccept: data.settings.autoAccept === true }
+              : null,
+            error: null,
+          });
+        }, () => setHostSettings({ status: 'error', settings: null, error: 'network' }));
+      };
+      const saveHostSettings = (next) => {
+        if (typeof fetch !== 'function') return;
+        createHostClient(fetch).saveSettings(next).then((data) => {
+          setHostSettings({
+            status: 'ready',
+            settings: data && typeof data === 'object' && data.settings && typeof data.settings === 'object'
+              ? { enabled: data.settings.enabled === true, autoAccept: data.settings.autoAccept === true }
+              : null,
+            error: null,
+          });
+          setNotice(t('settingsSaved'));
+        }, () => setNotice(t('settingsFailed')));
+      };
       const loadObjections = () => {
         if (typeof fetch !== 'function') {
           setObjections({ status: 'idle', rows: [], suppressed: [], kinds: [] });
@@ -1521,11 +1567,13 @@ window.__ModuleLoader__.load({
           loadHostQueue();
           loadChanges();
           loadObjections();
+          loadHostSettings();
         }, (error) => {
           setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
           setLedger([]);
           setHostQueue({ status: 'idle', rows: [], error: null });
           setObjections({ status: 'idle', rows: [], suppressed: [], kinds: [] });
+          setHostSettings({ status: 'idle', settings: null, error: null });
         });
       };
       useEffect(() => { probeHost(); }, []);
@@ -1929,6 +1977,26 @@ window.__ModuleLoader__.load({
             h('span', null, hostLine(host, t))),
           host.status === 'ok' && migratable > 0
             ? h('button', { type: 'button', className: 'dm-refresh', disabled: migrating, onClick: migrateToHost }, t('migrateButton').replace('{count}', String(migratable)))
+            : null,
+          host.status === 'ok' && hostSettings.status === 'ready' && hostSettings.settings !== null
+            ? h('section', { className: 'dm-settings' },
+              h('p', { className: 'dm-muted' }, t('settingsTitle')),
+              h('label', { className: 'dm-setting-row' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: hostSettings.settings.enabled,
+                  onChange: (event) => saveHostSettings({ enabled: event.target.checked }),
+                }),
+                h('span', null, t('settingsOn'))),
+              h('label', { className: 'dm-setting-row' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: hostSettings.settings.autoAccept,
+                  disabled: !hostSettings.settings.enabled,
+                  onChange: (event) => saveHostSettings({ autoAccept: event.target.checked }),
+                }),
+                h('span', null, t('settingsAutoAccept'))),
+              h('p', { className: 'dm-muted' }, t('settingsHint')))
             : null,
           host.status === 'ok' && hostQueue.status === 'error'
             ? h('p', { className: 'dm-muted', role: 'alert' }, t('hostCandidatesError'))

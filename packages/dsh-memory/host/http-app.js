@@ -14,6 +14,7 @@ import { classifyCandidates } from './classification.js';
 import { evaluateCandidatePolicies } from './policy.js';
 import { toLedgerType } from './memory-types.js';
 import { CORRECTION_KINDS } from './corrections.js';
+import { AUTO_ACCEPT_TYPE_CHOICES, loadSettings, writeSettings } from './settings.js';
 
 import { createLedgerService, toApiError } from './ledger-service.js';
 import { applyMigration, planMemoryMigration } from './migration.js';
@@ -319,11 +320,15 @@ export function createMemoryApp(options = {}) {
       try {
         const state = await service.state();
         const memories = Array.isArray(state.memories) ? state.memories : [];
+        const loadedSettings = loadSettings(dataDir);
         writeJson(res, 200, {
           ok: true,
           candidates: evaluateCandidatePolicies(
             classifyCandidates(await runtime.listCandidates(), memories),
-            { autoAccept: false },
+            {
+              autoAccept: loadedSettings.settings.enabled === true && loadedSettings.settings.autoAccept === true,
+              autoAcceptTypes: loadedSettings.settings.autoAcceptTypes,
+            },
           ),
           summary: await runtime.summary(),
         });
@@ -467,6 +472,40 @@ export function createMemoryApp(options = {}) {
       }
     },
 
+    /**
+     * Automatic-memory settings (§10.1.6).
+     *
+     * GET reports what is in force; POST changes only the three switches it
+     * owns. A setting is never a memory and never enters the ledger.
+     */
+    [`${API_PREFIX}/settings`]: async (req, res) => {
+      if (req.method === 'GET') {
+        if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+        const loaded = loadSettings(dataDir);
+        writeJson(res, 200, { ok: true, ...loaded, choices: { autoAcceptTypes: AUTO_ACCEPT_TYPE_CHOICES } });
+        return;
+      }
+      if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      try {
+        const body = await readJsonBody(req);
+        const current = loadSettings(dataDir).settings;
+        const next = {
+          enabled: body.enabled === undefined ? current.enabled : body.enabled,
+          autoAccept: body.autoAccept === undefined ? current.autoAccept : body.autoAccept,
+          autoAcceptTypes: body.autoAcceptTypes === undefined ? current.autoAcceptTypes : body.autoAcceptTypes,
+        };
+        if (typeof next.enabled !== 'boolean') { writeJson(res, 400, { ok: false, error: 'invalid-settings', field: 'enabled' }); return; }
+        if (typeof next.autoAccept !== 'boolean') { writeJson(res, 400, { ok: false, error: 'invalid-settings', field: 'autoAccept' }); return; }
+        if (!Array.isArray(next.autoAcceptTypes)) { writeJson(res, 400, { ok: false, error: 'invalid-settings', field: 'autoAcceptTypes' }); return; }
+        const written = writeSettings(dataDir, next);
+        writeJson(res, 200, { ok: true, ...written, choices: { autoAcceptTypes: AUTO_ACCEPT_TYPE_CHOICES } });
+      } catch (error) {
+        fail(res, error);
+      }
+    },
+
     [`${API_PREFIX}/migrate`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
       if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
@@ -531,7 +570,7 @@ export function createMemoryApp(options = {}) {
     return { candidates: { imported: imported.length, skipped } };
   }
 
-  return { routes, service, runtime, evidence };
+  return { routes, service, runtime, evidence, settings: () => loadSettings(dataDir).settings };
 }
 
 /** Turn the handler table into the exact WebRoute list the web server wants. */

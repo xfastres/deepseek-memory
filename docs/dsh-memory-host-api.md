@@ -93,6 +93,11 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 自动记忆设置（§10.1.6）：
+> - `GET /settings` → `{ ok, settings: { version, enabled, autoAccept, autoAcceptTypes }, loaded, fallback, choices: { autoAcceptTypes } }`；设置存于 `memory-settings.json`，不是记忆，绝不进入账本与版本历史。
+> - `POST /settings { enabled?, autoAccept?, autoAcceptTypes? }` → 只改传入的字段；类型错误返回 `400 invalid-settings {field}`；未知类型被丢弃并记入 `fallback`（设置只能把自动接受收窄到 `fact/preference/constraint` 的子集，不能扩大）。
+> - 默认：`enabled=true`（允许排队候选）、`autoAccept=false`（默认不自动写入）。`enabled=false` 时提取阶段直接不产生候选。
+
 > 异议与抑制（阶段 3.6，运行时而非账本）：
 > - `GET /objections` → `{ ok, objections: [{ id, memory_id, reason, status, created_at, reinstated_at? }], suppressed: [memoryId] }`（只读）；
 > - `POST /objections { memoryId, reason? }` → 记录一条「用户认为这条记忆有误」的异议；memoryId 不在账本中返回 `404 missing`；同一记忆已有生效异议返回 `409 duplicate`；不写 Git、不改记忆状态；

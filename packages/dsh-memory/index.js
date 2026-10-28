@@ -26,6 +26,7 @@ import {
 import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
 import { loadConfig, resolveConstraints } from './host/constraints.js';
 import { extractCandidates } from './host/extraction.js';
+import { decideAutoMemory, writeAutoAccepted } from './host/auto-memory.js';
 
 export { API_PREFIX, isTrustedWrite, writeJson };
 
@@ -34,7 +35,7 @@ export const PING_PATH = `${API_PREFIX}/ping`;
 
 /** Routes served by the memory application, in addition to the ping probe. */
 export const APP_ROUTE_NAMES = Object.freeze([
-  'state', 'history', 'changes', 'export', 'add', 'update', 'retract', 'migrate', 'candidates', 'candidate', 'review', 'objections', 'objections/clear', 'injections',
+  'state', 'history', 'changes', 'export', 'add', 'update', 'retract', 'migrate', 'candidates', 'candidate', 'review', 'objections', 'objections/clear', 'settings', 'injections',
 ]);
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -367,8 +368,13 @@ export function apply(ctx) {
       .then((app) => Promise.resolve(app.evidence === null || app.evidence === undefined ? undefined : app.evidence.resolve({ sessionId, turn }))
         .then((ref) => {
           if (ref === undefined || ref === null) return;
-          for (const entry of fresh) {
-            Promise.resolve(app.runtime.addCandidate({
+          const settings = typeof app.settings === 'function' ? app.settings() : { enabled: true, autoAccept: false, autoAcceptTypes: [] };
+          // The master switch stops extraction itself, not only the writing.
+          if (settings.enabled !== true) return;
+          const autoAcceptOn = settings.autoAccept === true;
+          return Promise.resolve(autoAcceptOn ? app.service.state() : null).then((state) => {
+            const memories = state !== null && state !== undefined && Array.isArray(state.memories) ? state.memories : [];
+            return Promise.all(fresh.map((entry) => Promise.resolve(app.runtime.addCandidate({
               text: entry.text,
               type: entry.type,
               sessionId,
@@ -377,8 +383,13 @@ export function apply(ctx) {
               reason: entry.rule,
               origin: 'rule',
               sourceRef: ref,
-            })).catch(() => {});
-          }
+            })).then((candidate) => {
+              const decided = decideAutoMemory({ candidate, memories, settings });
+              if (decided.policy.decision !== 'AUTO_ACCEPT') return undefined;
+              // A failed auto-write leaves the candidate pending for review.
+              return writeAutoAccepted({ service: app.service, runtime: app.runtime, candidate }).catch(() => undefined);
+            }).catch(() => undefined)));
+          });
         }))
       .catch(() => {});
   };

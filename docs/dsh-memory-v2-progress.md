@@ -1026,3 +1026,15 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `client.js`：`correctionLabel` 中英映射（未知 kind 返回 `null`，不编造）；异议两步确认中增加「问题类型」选择器（选项来自 Host 的 `kinds`，不再复制列表）；`object()` 只在有值时发送 `kind`。
 - 测试：新增 `corrections.test.mjs` 2 项（词汇表与 §10.1.7 一致、未知值拒绝）；`runtime-store` +1（kind 持久化、缺失为 null、未知 `invalid-kind`）；`http-app` +1（`kinds` 8 项、`kind` 落库、未知 kind 422 且账本零改动）；`client-panels` +1（标签映射、不伪造 reason、kind 随请求发送）；完整套件 **294/294 通过**；`git diff --check` 退出码 0。
 - 尚未完成（如实记录）：`§10.2` 的「让 LLM 提出修改」尚无模型侧入口（现有工具只有 `dsh_memory_ping`），4.6 的「定位记忆 → 核查证据 → 生成提案」目前只具备人工路径：异议记录 + 证据指针 + 手动编辑/合并/撤回；LLM 提案工具需要单独设计并与既有工具契约对齐。
+
+### 迭代 20（2026-10-28，阶段 4.5 + §10.1.6：自动记忆设置与受控自动接受）
+- 依据：`§10.1.6`（总开关、自动接受开关、按类型策略）、`§12 阶段 4.5`（低风险自动接受，可关闭、可撤销）、`D6`（有限自动接受，默认关闭）。此前 `/candidates` 把 `autoAccept: false` 写死，Policy 的 AUTO_ACCEPT 永远不可达，用户也没有任何开关。
+- 实现：
+  - 新增 `host/settings.js`：`memory-settings.json`（版本 1，`enabled`/`autoAccept`/`autoAcceptTypes`）；`loadSettings`（缺文件=默认 + `missing-file` 诊断）、`normaliseSettings`（坏值回退并逐字段记名，重复坏值只记一次）、`writeSettings`（临时文件 + rename 原子写）。
+  - 新增 `host/auto-memory.js`：`decideAutoMemory` 复用 `classifyCandidate` + `evaluateCandidatePolicy`（无旁路）；`writeAutoAccepted` 通过唯一 Writer `service.add` 写入，幂等键 `auto:<candidateId>`，随后把候选标为 `accepted`；写入失败向上抛，候选留在待复核状态（不谎称成功）。
+  - `host/policy.js`：`autoAcceptTypes` 只做收窄（`AUTO_ACCEPT_TYPES.filter(...)`），无法扩大白名单；`evaluateCandidatePolicies` 透传。
+  - `host/http-app.js`：`GET/POST /settings`；`/candidates` 的 policy 改用已保存的设置；`createMemoryApp` 返回 `settings()` 供提取阶段读取。
+  - `index.js`：提取阶段读设置——`enabled=false` 时完全不产生候选；开启自动接受时用**当时的新鲜账本状态**做分类，只有 `AUTO_ACCEPT` 的候选自动写入，其余留在队列。
+  - `client.js`：自动记忆设置区（总开关 + 自动接受开关 + 说明），保存即写回 Host；i18n 中英各 7 条。
+- 测试：`settings.test.mjs` 5 项（默认值、缺文件、坏值回退记名、原子写入不留临时文件、可选项与账本类型一致）；`auto-memory.test.mjs` 6 项（关闭→REVIEW、总开关优先、用户白名单收窄、低置信/无证据/重复仍拦截、写入一次且幂等键正确、失败上抛）；`policy` +1（设置只能收窄）；`http-app` +2（设置路由读/写/403/415/400、候选策略随开关变化且策略不等于写入）；`client-panels` +1（开关只传布尔、不发多余字段）；`host.test` 路由契约 +1；完整套件 **309/309 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上的自动接受端到端（提取 → Policy → Writer → Git 提交 → 注入），需要新进程与真实对话；浏览器上开关的视觉与交互；`enabled=false` 对已排队候选的影响（只阻止新候选，不清空旧队列——这是有意的，未清空）。

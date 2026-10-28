@@ -603,3 +603,22 @@ test('correction kinds are named, and an unknown kind is not translated', async 
   await client.object({ memoryId: 'M-1', kind: 'too_broad' });
   assert.deepEqual(JSON.parse(calls[0].init.body), { memoryId: 'M-1', kind: 'too_broad' }, 'the kind travels, no reason is invented');
 });
+
+test('the settings switches travel as booleans and nothing else', async () => {
+  const { plugin, t } = await load();
+  const calls = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, settings: { enabled: true, autoAccept: false } }) };
+  });
+  const listed = await client.settings();
+  assert.equal(listed.settings.autoAccept, false);
+  await client.saveSettings({ autoAccept: true });
+  await client.saveSettings({ enabled: false });
+  assert.deepEqual(calls.map((call) => call.url), ['api/dsh-memory/settings', 'api/dsh-memory/settings', 'api/dsh-memory/settings']);
+  assert.deepEqual(JSON.parse(calls[1].init.body), { autoAccept: true });
+  assert.deepEqual(JSON.parse(calls[2].init.body), { enabled: false });
+  for (const key of ['settingsTitle', 'settingsOn', 'settingsAutoAccept', 'settingsSave', 'settingsSaved', 'settingsFailed', 'settingsHint']) {
+    assert.notEqual(t(key), key, 'missing zh text for ' + key);
+  }
+});

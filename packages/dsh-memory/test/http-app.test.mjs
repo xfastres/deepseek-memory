@@ -657,3 +657,94 @@ test('the objection routes speak the correction vocabulary', async () => {
     assert.equal(state.json.memories.length, 1);
   });
 });
+
+test('the settings route reports, changes and validates the automatic-memory switches', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+    const initial = await call(app, '/api/dsh-memory/settings');
+    assert.equal(initial.status, 200);
+    assert.equal(initial.json.settings.enabled, true, 'extraction is on by default');
+    assert.equal(initial.json.settings.autoAccept, false, 'nothing is written unattended by default');
+    assert.deepEqual(initial.json.fallback, ['missing-file']);
+    assert.deepEqual(initial.json.choices.autoAcceptTypes, ['fact', 'preference', 'constraint']);
+
+    const crossSite = await call(app, '/api/dsh-memory/settings', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS, 'sec-fetch-site': 'cross-site' },
+      body: { autoAccept: true },
+    });
+    assert.equal(crossSite.status, 403);
+    const notJson = await call(app, '/api/dsh-memory/settings', {
+      method: 'POST', headers: { ...BROWSER, 'content-type': 'text/plain' }, body: 'x',
+    });
+    assert.equal(notJson.status, 415);
+
+    const saved = await call(app, '/api/dsh-memory/settings', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { enabled: true, autoAccept: true },
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.json.settings.autoAccept, true);
+    const reloaded = await call(app, '/api/dsh-memory/settings');
+    assert.equal(reloaded.json.loaded, true, 'the change is on disk, not only in memory');
+    assert.equal(reloaded.json.settings.autoAccept, true);
+
+    const narrowed = await call(app, '/api/dsh-memory/settings', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { autoAcceptTypes: ['fact'] },
+    });
+    assert.deepEqual(narrowed.json.settings.autoAcceptTypes, ['fact']);
+
+    const badValue = await call(app, '/api/dsh-memory/settings', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { autoAccept: 'yes' },
+    });
+    assert.equal(badValue.status, 400);
+    assert.equal(badValue.json.error, 'invalid-settings');
+    assert.equal(badValue.json.field, 'autoAccept');
+    assert.equal((await call(app, '/api/dsh-memory/settings')).json.settings.autoAccept, true, 'a refused change leaves the old value');
+
+    const mixed = await call(app, '/api/dsh-memory/settings', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { autoAccept: false, autoAcceptTypes: ['fact', 'hypothesis'] },
+    });
+    assert.deepEqual(mixed.json.settings.autoAcceptTypes, ['fact'], 'only writable types survive');
+    assert.ok(mixed.json.fallback.includes('autoAcceptTypes'));
+  });
+});
+
+test('the candidate policy follows the switches the user saved', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { text: '项目使用 pnpm', type: 'fact', confidence: 0.9, sessionId: 's1', turn: 1 },
+    });
+    const off = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(off.json.candidates[0].policy.decision, 'REVIEW_REQUIRED');
+    assert.deepEqual(off.json.candidates[0].policy.reasons, ['auto-accept-disabled']);
+
+    await call(app, '/api/dsh-memory/settings', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { autoAccept: true },
+    });
+    const on = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(on.json.candidates[0].policy.decision, 'AUTO_ACCEPT');
+
+    await call(app, '/api/dsh-memory/settings', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { autoAcceptTypes: ['preference'] },
+    });
+    const narrowed = await call(app, '/api/dsh-memory/candidates');
+    assert.equal(narrowed.json.candidates[0].policy.decision, 'REVIEW_REQUIRED');
+    assert.deepEqual(narrowed.json.candidates[0].policy.reasons, ['type-not-auto']);
+
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 0, 'a policy decision is not a write');
+  });
+});

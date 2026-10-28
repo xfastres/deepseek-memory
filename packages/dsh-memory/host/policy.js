@@ -30,6 +30,7 @@ export const DEFAULT_CONFIDENCE_THRESHOLD = 0.6;
  * @param {number|null} [input.confidence]
  * @param {boolean} [input.hasEvidence] a real source ref exists
  * @param {boolean} [input.autoAccept] whether the user enabled auto-accept
+ * @param {string[]} [input.autoAcceptTypes] types the user allowed (settings)
  * @param {boolean} [input.sensitive] user marked it private / not for injection
  * @param {number} [input.confidenceThreshold]
  * @returns {{ decision: string, reasons: string[] }}
@@ -43,6 +44,10 @@ export function evaluateCandidatePolicy(input = {}) {
   const autoAccept = input.autoAccept === true;
   const sensitive = input.sensitive === true;
   const threshold = typeof input.confidenceThreshold === 'number' ? input.confidenceThreshold : DEFAULT_CONFIDENCE_THRESHOLD;
+  // The user's allow-list (settings) narrows the built-in one; it cannot widen it.
+  const allowedTypes = Array.isArray(input.autoAcceptTypes)
+    ? AUTO_ACCEPT_TYPES.filter((type) => input.autoAcceptTypes.includes(type))
+    : AUTO_ACCEPT_TYPES;
 
   if (classification === 'NO_CHANGE') return { decision: 'NO_CHANGE', reasons: ['duplicate'] };
   if (classification === 'CONFLICT') return { decision: 'CONFLICT', reasons: ['conflict'] };
@@ -52,7 +57,7 @@ export function evaluateCandidatePolicy(input = {}) {
   if (confidence !== null && confidence < threshold) return { decision: 'REVIEW_REQUIRED', reasons: ['low-confidence'] };
   if (type !== null && REVIEW_ONLY_TYPES.includes(type)) return { decision: 'REVIEW_REQUIRED', reasons: ['type-needs-user'] };
   if (type === null) return { decision: 'REVIEW_REQUIRED', reasons: ['type-unknown'] };
-  if (!AUTO_ACCEPT_TYPES.includes(type)) return { decision: 'REVIEW_REQUIRED', reasons: ['type-not-auto'] };
+  if (!allowedTypes.includes(type)) return { decision: 'REVIEW_REQUIRED', reasons: ['type-not-auto'] };
   if (!autoAccept) return { decision: 'REVIEW_REQUIRED', reasons: ['auto-accept-disabled'] };
   return { decision: 'AUTO_ACCEPT', reasons: ['eligible'] };
 }
@@ -71,6 +76,7 @@ export function evaluateCandidatePolicies(candidates, options = {}) {
         confidence: row.confidence ?? null,
         hasEvidence: refs.length > 0,
         autoAccept: options.autoAccept === true,
+        autoAcceptTypes: options.autoAcceptTypes,
         sensitive: options.sensitiveIds !== undefined && options.sensitiveIds !== null && Array.isArray(options.sensitiveIds)
           ? options.sensitiveIds.includes(row.id)
           : false,
