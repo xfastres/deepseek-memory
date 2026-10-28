@@ -926,3 +926,24 @@ test('a write whose evidence cannot be found in the log is refused, not stored',
     assert.equal(accepted.status, 200);
   });
 });
+
+test('objections tell the reader which memories are waiting for a review', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const memory = await addMemory(app, '项目使用 pnpm');
+    const broad = await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId: memory.id, kind: 'too_broad', reason: '太宽泛' },
+    });
+    assert.equal(broad.status, 200);
+    const listed = await call(app, '/api/dsh-memory/objections');
+    assert.deepEqual(listed.json.review_pending, [memory.id], 'a broadness objection asks for a re-check');
+    assert.deepEqual(listed.json.suppressed, [memory.id], 'and it is still hidden until reviewed');
+  });
+});

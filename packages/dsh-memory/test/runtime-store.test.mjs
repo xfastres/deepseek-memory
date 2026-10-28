@@ -283,3 +283,18 @@ test('old runtime files are read as the §7.2 statuses and rewritten only on wri
     assert.equal(rewritten.candidates[0].status, 'review_pending', 'the next write stores the new vocabulary');
   });
 });
+
+test('a review objection is reported as waiting, a wrong objection is not', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-review-'));
+  try {
+    const store = createRuntimeStore({ root: dir });
+    await store.addObjection({ memoryId: 'M-broad', kind: 'too_broad', reason: '太宽泛' });
+    await store.addObjection({ memoryId: 'M-wrong', kind: 'wrong', reason: '说错了' });
+    assert.deepEqual(await store.reviewPendingIds(), ['M-broad']);
+    assert.deepEqual((await store.suppressedIds()).sort(), ['M-broad', 'M-wrong'], 'both are still hidden from retrieval');
+    await store.reinstate('M-broad');
+    assert.deepEqual(await store.reviewPendingIds(), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

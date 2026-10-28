@@ -22,11 +22,33 @@ export function candidateStatusForPolicy(decision) {
   return 'review_pending';
 }
 
-export function decideAutoMemory({ candidate, memories, settings }) {
+const normaliseText = (value) => String(value ?? '').toLowerCase().replace(/\s+/gu, '');
+
+/**
+ * Decide what should happen to one freshly extracted candidate.
+ *
+ * `reviewPending` carries the memories the user objected to in a way that asks
+ * for a re-check. Re-extracting the same sentence must not quietly bring it
+ * back as an auto-accepted memory while the user is still deciding, so it goes
+ * to review instead (§6.4: "异议尚未解决的记忆不能被自动接受流程重新激活").
+ */
+export function decideAutoMemory({ candidate, memories, settings, reviewPending = [] }) {
   const classification = classifyCandidate(candidate, memories);
   const refs = candidate !== null && typeof candidate === 'object' && Array.isArray(candidate.source_refs)
     ? candidate.source_refs
     : [];
+  const waiting = new Set(Array.isArray(reviewPending) ? reviewPending.filter((id) => typeof id === 'string') : []);
+  if (waiting.size > 0) {
+    const text = normaliseText(candidate !== null && typeof candidate === 'object' ? candidate.text : '');
+    const blocked = (Array.isArray(memories) ? memories : []).some((memory) => memory !== null
+      && typeof memory === 'object'
+      && typeof memory.id === 'string'
+      && waiting.has(memory.id)
+      && normaliseText(memory.content) === text);
+    if (blocked) {
+      return { classification, policy: { decision: 'REVIEW_REQUIRED', reasons: ['objected-memory'] } };
+    }
+  }
   const policy = evaluateCandidatePolicy({
     classification,
     type: candidate !== null && typeof candidate === 'object' ? candidate.type : null,

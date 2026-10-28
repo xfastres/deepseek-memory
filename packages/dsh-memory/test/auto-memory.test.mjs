@@ -3,6 +3,8 @@ import { test } from 'node:test';
 
 import { candidateStatusForPolicy, decideAutoMemory, writeAutoAccepted } from '../host/auto-memory.js';
 
+const REF = { session_id: 's1', event_seq: 2, event_type: 'user/message' };
+
 const SETTINGS_ON = { enabled: true, autoAccept: true, autoAcceptTypes: ['fact', 'preference', 'constraint'] };
 const SETTINGS_OFF = { enabled: true, autoAccept: false, autoAcceptTypes: ['fact', 'preference', 'constraint'] };
 
@@ -88,4 +90,22 @@ test('the policy decision maps to an honest candidate status', () => {
   assert.equal(candidateStatusForPolicy('REJECT'), 'rejected');
   assert.equal(candidateStatusForPolicy('REVIEW_REQUIRED'), 'review_pending');
   assert.equal(candidateStatusForPolicy('something-else'), 'review_pending', 'the safe default keeps it in the queue');
+});
+
+test('a memory waiting for review is not auto-accepted again', () => {
+  const memories = [{ id: 'M-1', status: 'active', content: '用户偏好中文回答', type: 'preference' }];
+  const settings = { version: 1, enabled: true, autoAccept: true, autoAcceptTypes: ['preference'] };
+  const fresh = { id: 'C-1', text: '用户偏好简洁的回答', type: 'preference', confidence: 0.9, source_refs: [REF] };
+  const allowed = decideAutoMemory({ candidate: fresh, memories, settings });
+  assert.equal(allowed.policy.decision, 'AUTO_ACCEPT', 'a fresh preference is allowed when the switches are on');
+
+  // Re-extracting the objected sentence must not quietly restore it.
+  const repeat = { id: 'C-2', text: '用户偏好中文回答', type: 'preference', confidence: 0.9, source_refs: [REF] };
+  const guarded = decideAutoMemory({ candidate: repeat, memories, settings, reviewPending: ['M-1'] });
+  assert.equal(guarded.policy.decision, 'REVIEW_REQUIRED');
+  assert.deepEqual(guarded.policy.reasons, ['objected-memory']);
+  assert.equal(candidateStatusForPolicy(guarded.policy.decision), 'review_pending');
+
+  const unrelated = decideAutoMemory({ candidate: fresh, memories, settings, reviewPending: ['M-1'] });
+  assert.equal(unrelated.policy.decision, 'AUTO_ACCEPT', 'a different sentence is not blocked by an unrelated objection');
 });

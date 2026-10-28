@@ -446,7 +446,13 @@ export function createMemoryApp(options = {}) {
         if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
         try {
           const objections = await runtime.listObjections();
-          writeJson(res, 200, { ok: true, objections, suppressed: await runtime.suppressedIds(), kinds: CORRECTION_KINDS });
+          writeJson(res, 200, {
+          ok: true,
+          objections,
+          suppressed: await runtime.suppressedIds(),
+          review_pending: await runtime.reviewPendingIds(),
+          kinds: CORRECTION_KINDS,
+        });
         } catch (error) {
           runtimeFail(res, error);
         }

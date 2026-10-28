@@ -538,13 +538,14 @@ export function apply(ctx) {
     Promise.resolve()
       .then(() => getApp())
       .then((app) => Promise.resolve(app.evidence === null || app.evidence === undefined ? undefined : app.evidence.resolve({ sessionId, turn }))
-        .then((ref) => {
+        .then(async (ref) => {
           if (ref === undefined || ref === null) return;
           const settings = typeof app.settings === 'function' ? app.settings() : { enabled: true, autoAccept: false, autoAcceptTypes: [] };
           // The master switch stops extraction itself, not only the writing.
           if (settings.enabled !== true) return;
           const autoAcceptOn = settings.autoAccept === true;
-          return Promise.resolve(autoAcceptOn ? app.service.state() : null).then((state) => {
+          const reviewPending = autoAcceptOn ? await app.runtime.reviewPendingIds() : [];
+          return Promise.resolve(autoAcceptOn ? app.service.state() : null).then(async (state) => {
             const memories = state !== null && state !== undefined && Array.isArray(state.memories) ? state.memories : [];
             return Promise.all(fresh.map((entry) => Promise.resolve(app.runtime.addCandidate({
               text: entry.text,
@@ -556,7 +557,7 @@ export function apply(ctx) {
               origin: 'rule',
               sourceRef: ref,
             })).then((candidate) => {
-              const decided = decideAutoMemory({ candidate, memories, settings });
+              const decided = decideAutoMemory({ candidate, memories, settings, reviewPending });
               if (decided.policy.decision !== 'AUTO_ACCEPT') {
                 // The queue says what the policy decided, not just "pending".
                 return Promise.resolve(app.runtime.setCandidateStatus(candidate.id, candidateStatusForPolicy(decided.policy.decision))).catch(() => undefined);

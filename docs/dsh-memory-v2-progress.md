@@ -1112,3 +1112,16 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：新增 `correction-detect.test.mjs` 7 项（线索识别与日常表达区分、唯一目标成异议、歧义/无目标/弱命中/已撤回不动作、已在抑制列表不重复、真实 `createRuntimeStore` 下记录后立即 `suppressedIds`、存储失败与运行时不可用如实上报、duplicate 视为同结果、预检查成本）；`host.test` +1 端到端（预置一条真实记忆 → 触发 pre-step「这条 pnpm 记忆已经过时了」→ 运行时出现 `outdated` 异议且 `memory_id` 正确、reason 保留用户原话）；完整套件 **345/345 通过**；`git diff --check` 退出码 0。
 - 过程中发现并修正：最初版本对**每条**用户消息都读取 `service.state()`（会打开 Git 仓库），导致全套件并行时 3 个既有测试因资源竞争超时；加入廉价预检查后恢复 345/345。另修 `host.test` 新用例在 Windows 上删除临时 Git 仓库偶发 `EBUSY`（清理加重试，不是放宽断言）。
 - 未验证：真实会话中的识别准确率（无中文/英文真实样本集）；「太宽泛」类只记录异议但不进入 review_pending（`§6.3` 的分支尚未实现）；LLM 基于证据生成收窄提案的环节仍靠模型主动调用 `memory_propose`；浏览器端到端与新进程验证。
+
+### 迭代 28（2026-10-28，阶段 6 的「太宽泛 → 待核查」分支）
+- 依据：`roadmap §6.3`（「太宽泛/缺少上下文」先记录异议并进入 review_pending，不能当作已确认结论）、`§6.4`（异议未解决的记忆不能被自动接受流程重新激活）、`§7.2`（review_pending 可作为运行时异议标记）。缺口证据：上一轮自然语言纠错把所有异议一律当成「停止使用」，没有区分核查类；自动接受路径也完全不知道哪些记忆正在被核查。
+- 实现：
+  - `host/corrections.js`：新增 `REVIEW_ONLY_KINDS = ['too_broad','missing_context','wrong_scope','duplicate']` 与 `isReviewOnlyKind`，把「请核查」与「判错」的语义集中在词汇表一处。
+  - `host/runtime-store.js`：`reviewPendingIds()`（活动异议中属于核查类的 memory id；这些记忆**仍在 suppressed 中**，未核查清楚前不得进入检索/注入）。
+  - `host/http-app.js`：`GET /objections` 新增 `review_pending` 字段。
+  - `host/auto-memory.js`：`decideAutoMemory` 接受 `reviewPending`，候选正文与被核查记忆完全相同时降为 `REVIEW_REQUIRED / objected-memory`，杜绝「用户刚说太宽泛、下一轮自动提取又把同一句写回去」。
+  - `index.js`：自动接受分支在开启时读取 `reviewPendingIds()` 一并传入。
+  - `client.js`：异议状态加入 `reviewPending`，账本行对这类记忆显示「待核查」徽标（与「已抑制」并存，如实表达两种不同含义）。
+- 测试：`corrections` +1（核查类映射，4 个「停止」类明确为 false）；`runtime-store` +1（核查类进 reviewPending、两类都被抑制、恢复后清空）；`auto-memory` +1（同一句被核查时不再自动接受；不同句子不受影响）；`http-app` +1（`review_pending` 与 `suppressed` 同时包含该记忆）；完整套件 **349/349 通过**；`git diff --check` 退出码 0。
+- 文档冲突（未擅自解决）：`roadmap §6.2` 的异议类型名是 `incorrect / too_broad / outdated / missing_context / wrong_scope / duplicate / should_not_store / delete_request / other`，而实现（`corrections.js`，已被 UI/API/测试使用）是 `wrong / too_broad / outdated / missing_context / wrong_scope / duplicate / should_not_save / delete`，且没有 `other`。两者语义对应但命名不同；改名会破坏已发布接口，本轮只记录不改。
+- 未验证：浏览器实际显示与交互（徽标渲染未在浏览器验证，`useEffect` 测试桩不执行异步加载）；核查类异议是否应在某些情形临时保留注入（§6.3 说「按风险决定」），当前一律抑制，属偏安全的选择；真实会话中的识别准确率。

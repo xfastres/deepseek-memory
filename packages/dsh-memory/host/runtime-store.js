@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { LedgerLockError, RepoLock } from '../../provider-git-ledger/src/lock.js';
 import { toLedgerType } from './memory-types.js';
-import { isCorrectionKind } from './corrections.js';
+import { isCorrectionKind, isReviewOnlyKind } from './corrections.js';
 
 export const RUNTIME_FILE = 'runtime.json';
 export const RUNTIME_VERSION = 1;
@@ -278,6 +278,26 @@ export function createRuntimeStore(options = {}) {
     /** Objections in the order they were made. */
     async listObjections() {
       return (await read()).objections;
+    },
+
+    /**
+     * Memory ids whose objection asks for a re-check, not a stop (§6.3).
+     *
+     * These are still suppressed from retrieval: an unreviewed "too broad"
+     * claim must not be presented as confirmed. The list exists so the panel
+     * and the auto-accept guard can tell "hidden until fixed" from "hidden
+     * because it was wrong".
+     */
+    async reviewPendingIds() {
+      const document = await read();
+      const ids = [];
+      for (const entry of document.objections) {
+        if (entry === null || typeof entry !== 'object') continue;
+        if (entry.status !== 'active' || typeof entry.memory_id !== 'string') continue;
+        if (!isReviewOnlyKind(entry.kind)) continue;
+        if (!ids.includes(entry.memory_id)) ids.push(entry.memory_id);
+      }
+      return ids;
     },
 
     /** Memory ids the user has objected to and not reinstated. */
