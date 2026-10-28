@@ -319,8 +319,46 @@ export function apply(ctx) {
     injection.refresh().catch(() => {});
   };
 
-  const systemPrompt = service(ctx, 'systemPrompt');
-  let contextOff = null;
+  /**
+   * Offer extracted sentences for review, never as memories.
+   *
+   * A candidate needs proof that the user said it, so the turn is resolved to
+   * its exact event first; when that fails nothing is written and nothing is
+   * invented. A sentence already present in the ledger is skipped, so review
+   * does not collect the same claim every turn. This is fire-and-forget: a
+   * ledger problem must not delay or fail a turn.
+   */
+  const proposeForReview = (payload, entries) => {
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    const sessionId = payload && payload.agent && typeof payload.agent.id === 'string' ? payload.agent.id : null;
+    const turn = payload && Number.isInteger(payload.turn) ? payload.turn : null;
+    if (sessionId === null || turn === null) return;
+    const known = new Set(injection.snapshot.memories
+      .filter((memory) => memory && memory.status === 'active')
+      .map((memory) => String(memory.content ?? '').replace(/\s+/gu, '').toLowerCase()));
+    const fresh = entries.filter((entry) => !known.has(entry.text.replace(/\s+/gu, '').toLowerCase()));
+    if (fresh.length === 0) return;
+    Promise.resolve()
+      .then(() => getApp())
+      .then((app) => Promise.resolve(app.evidence === null || app.evidence === undefined ? undefined : app.evidence.resolve({ sessionId, turn }))
+        .then((ref) => {
+          if (ref === undefined || ref === null) return;
+          for (const entry of fresh) {
+            Promise.resolve(app.runtime.addCandidate({
+              text: entry.text,
+              type: entry.type,
+              sessionId,
+              turn,
+              confidence: entry.confidence,
+              reason: entry.rule,
+              sourceRef: ref,
+            })).catch(() => {});
+          }
+        }))
+      .catch(() => {});
+  };
+
+  const systemPrompt = service(ctx, 'systemPrompt');  let contextOff = null;
   /**
    * Register the prompt context only once the ledger holds an active memory.
    * Prompt assembly is on the critical path of every step, so an empty store
@@ -374,6 +412,7 @@ export function apply(ctx) {
       } catch {
         proposed = [];
       }
+      proposeForReview(payload, proposed);
       return Promise.resolve(injection.ensureFresh())
         .then(() => ensureContext())
         .catch(() => {})

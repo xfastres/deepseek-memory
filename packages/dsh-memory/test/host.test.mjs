@@ -292,3 +292,73 @@ test('a ledger with an active memory reaches the prompt, and only then', async (
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a durable sentence becomes a reviewable candidate, with its evidence', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-candidate-'));
+  const previous = process.env.DSH_MEMORY_DATA_DIR;
+  process.env.DSH_MEMORY_DATA_DIR = dir;
+  try {
+    const listeners = [];
+    const sessionQuery = {
+      async listEvents() { return [{ seq: 1, type: 'turn/start' }, { seq: 2, type: 'user/message' }]; },
+      async readEvent() { return { target: { data: { turn: 1 } } }; },
+    };
+    const ctx = {
+      get: (name) => ({ sessionQuery })[name],
+      effect: (fn) => { fn(); return () => {}; },
+      on: (event, handler) => { listeners.push({ event, handler }); return () => {}; },
+    };
+    apply(ctx);
+
+    await listeners[0].handler.call(ctx, {
+      agent: { id: 'session-x' },
+      turn: 1,
+      messages: [{ role: 'user', content: '记住这个项目用 pnpm，不要用 npm' }],
+    }, () => ({ kind: 'enter', messages: [] }));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const check = createMemoryApp({ dataDir: dir, sessionQuery });
+    const candidates = await check.runtime.listCandidates();
+    assert.equal(candidates.length, 1, 'one durable sentence becomes one candidate');
+    assert.match(candidates[0].text, /pnpm/);
+    assert.equal(candidates[0].reason, 'instruction');
+    assert.equal(candidates[0].source_refs[0].event_seq, 2, 'the candidate carries the real event');
+    assert.equal(candidates[0].source_refs[0].session_id, 'session-x');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
+    else process.env.DSH_MEMORY_DATA_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a candidate is never created without provable evidence', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-candidate-'));
+  const previous = process.env.DSH_MEMORY_DATA_DIR;
+  process.env.DSH_MEMORY_DATA_DIR = dir;
+  try {
+    const listeners = [];
+    const sessionQuery = {
+      async listEvents() { throw new Error('no such session'); },
+      async readEvent() { throw new Error('no such session'); },
+    };
+    const ctx = {
+      get: (name) => ({ sessionQuery })[name],
+      effect: (fn) => { fn(); return () => {}; },
+      on: (event, handler) => { listeners.push({ event, handler }); return () => {}; },
+    };
+    apply(ctx);
+    await listeners[0].handler.call(ctx, {
+      agent: { id: 'session-missing' },
+      turn: 1,
+      messages: [{ role: 'user', content: '记住这个项目用 pnpm' }],
+    }, () => ({ kind: 'enter', messages: [] }));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const check = createMemoryApp({ dataDir: dir, sessionQuery });
+    assert.deepEqual(await check.runtime.listCandidates(), [], 'an unprovable sentence must not become a candidate');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
+    else process.env.DSH_MEMORY_DATA_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
