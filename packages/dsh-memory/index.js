@@ -25,6 +25,7 @@ import {
 } from './host/http-app.js';
 import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
 import { loadConfig, resolveConstraints } from './host/constraints.js';
+import { applyCorrection, isCorrectionCandidate } from './host/correction-detect.js';
 import { extractCandidates } from './host/extraction.js';
 import { candidateStatusForPolicy, decideAutoMemory, writeAutoAccepted } from './host/auto-memory.js';
 import { searchMemories } from './host/search.js';
@@ -568,6 +569,48 @@ export function apply(ctx) {
       .catch(() => {});
   };
 
+  /**
+   * Turn a natural-language complaint into an objection (§6.1–6.4).
+   *
+   * Only an unambiguous target is objected to; otherwise nothing happens and
+   * the user decides in the panel. The objection suppresses the memory from
+   * retrieval at once (D7) and is not a ledger write, so a wrong guess could
+   * not corrupt history — but it would still hide a good memory, which is why
+   * ambiguity means no action. Gated by the same master switch as extraction.
+   */
+  const handleCorrection = (payload, text) => {
+    // Most turns are not corrections; do not open the ledger to find that out.
+    if (!isCorrectionCandidate(text)) return;
+    Promise.resolve()
+      .then(() => getApp())
+      .then((app) => {
+        const settings = typeof app.settings === 'function' ? app.settings() : { enabled: true };
+        if (settings.enabled !== true) return undefined;
+        return Promise.all([app.service.state(), app.runtime.suppressedIds()]).then(([state, suppressedIds]) => {
+          const memories = state !== null && state !== undefined && Array.isArray(state.memories) ? state.memories : [];
+          return applyCorrection({
+            text,
+            memories,
+            suppressedIds,
+            runtime: app.runtime,
+            now: payload !== null && payload !== undefined && Number.isInteger(payload.turn) ? payload.turn : undefined,
+          }).then((decision) => {
+            contextState.lastCorrection = {
+              act: decision.act === true,
+              recorded: decision.recorded === true,
+              reason: decision.reason,
+            };
+            if (decision.recorded === true) {
+              // A memory that was just called wrong must not come back in the
+              // next prompt, so the snapshot is rebuilt rather than waited for.
+              injection.refresh().catch(() => {});
+            }
+          });
+        });
+      })
+      .catch(() => {});
+  };
+
   const flushState = { ok: null, error: null, written: 0 };
   /**
    * Persist queued injection records at a step boundary.
@@ -727,6 +770,7 @@ export function apply(ctx) {
         proposed = [];
       }
       proposeForReview(payload, proposed);
+      handleCorrection(payload, observed === null ? '' : observed.text);
       // A failed refresh must not skip registration: the two are separate
       // steps, and the previous shape hid exactly that failure.
       return Promise.resolve(injection.ensureFresh())

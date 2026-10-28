@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { createMemoryApp } from '../host/http-app.js';
+import { createLedgerService } from '../host/ledger-service.js';
+import { createRuntimeStore } from '../host/runtime-store.js';
 import {
   APP_ROUTE_NAMES,
   apply,
@@ -369,6 +371,54 @@ test('a candidate is never created without provable evidence', async () => {
   } finally {
     if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
     else process.env.DSH_MEMORY_DATA_DIR = previous;
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test('a natural-language correction hides the memory it clearly names', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-correct-'));
+  const previous = process.env.DSH_MEMORY_DATA_DIR;
+  process.env.DSH_MEMORY_DATA_DIR = dir;
+  try {
+    const ledger = createLedgerService({ root: join(dir, 'ledger') });
+    await ledger.add({
+      content: '项目使用 pnpm 管理依赖',
+      sourceRefs: [{ session_id: 's1', event_seq: 2, event_type: 'user/message' }],
+    });
+    const listeners = [];
+    const tooled = [];
+    const ctx = {
+      get: () => undefined,
+      effect: (fn) => { fn(); return () => {}; },
+      on: (event, handler) => { listeners.push({ event, handler }); return () => {}; },
+    };
+    ctx.get = (name) => ({ webServer: { register() { return () => {}; } }, tools: { register(definition) { tooled.push(definition); return () => {}; } } })[name];
+    apply(ctx);
+
+    const decision = { kind: 'enter', messages: [] };
+    const handler = listeners.find((entry) => entry.event === 'agent/pre-step').handler;
+    await handler.call(ctx, {
+      agent: { id: 'session-x' },
+      messages: [{ role: 'user', content: '这条 pnpm 记忆已经过时了' }],
+      turn: 3,
+      step: 1,
+    }, () => decision);
+
+    const runtime = createRuntimeStore({ root: join(dir, 'runtime') });
+    let suppressed = [];
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      suppressed = await runtime.suppressedIds();
+      if (suppressed.length > 0) break;
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+    }
+    assert.equal(suppressed.length, 1, 'the objection was recorded without the user opening the panel');
+    const objections = await runtime.listObjections();
+    assert.equal(objections[0].kind, 'outdated');
+    assert.equal(objections[0].memory_id, suppressed[0]);
+    assert.ok(objections[0].reason.includes('pnpm'), 'the reason keeps the user words, not an invention');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
+    else process.env.DSH_MEMORY_DATA_DIR = previous;
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

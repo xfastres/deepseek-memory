@@ -1103,3 +1103,12 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：`session-evidence.test` +2（解析出的 ref 带原文哈希；原文被改动后校验报 `quote-mismatch`）、并修正 1 处旧断言（解析现在会为取哈希多读一次 message，读数 `[8] → [8, 10]`）；`http-app.test` +1（日志中不存在的事件 seq → `422` 且账本为空；同一 session 的真实 seq 写入成功）；完整套件 **337/337 通过**；`git diff --check` 退出码 0。
 - 文档冲突（未擅自解决）：`roadmap 4.1` 要求 ref 记录「说话方」，`provider-git-ledger` 的 `validateSourceRef` 只有 `event_type`，没有 `role` 字段；当前用 `user/message` 表达说话方。是否新增 `role` 属数据格式决策，记入待确认。
 - 未验证：真实宿主的 `sessionQuery` 返回结构（`readEvent.target.data.content` 是否总是文本块）只在测试夹具中验证；浏览器端到端；会话日志被压缩/清理后历史记忆的校验行为（当前会拒绝写入新变更，但读取旧记忆不受影响）；迁移在真实生产数据上的表现（未操作生产数据）。
+
+### 迭代 27（2026-10-28，阶段 6：自然语言纠错的「识别 → 记录异议 → 立即抑制」）
+- 依据：`roadmap §6.1`（自然语言异议、必须关联 `memory_id`，**无法确定目标时不得猜测**）、`§6.3`（立即记录异议事件）、`§6.4`（明确指出错误时立即加入抑制列表，不等 Git 提交）、`D7`。缺口证据：异议只能从面板按钮发起，`runtime.addObjection` 没有自然语言入口；用户说「这条记忆过时了」时系统不会记录任何异议。
+- 实现：
+  - 新增 `host/correction-detect.js`：8 种纠错线索正则（与 `corrections.js` 的类型一致，含英文线索）；`correctionKinds` 只认「纠错线索 + 指向记忆的名词」，`我算错了` 之类的日常表达不算；`evaluateCorrection` 复用注入同一套 `scoreMemory` 词面评分，要求**唯一清晰目标**（两条评分差 < 0.05 判 `ambiguous-target`，词面为 0 判 `no-target`，命中太弱判 `weak-target`，一律不动作）；`applyCorrection` 调用 `runtime.addObjection`，失败如实返回 `failed:<code>`，已有异议视为同结果。
+  - `index.js`：`agent/pre-step` 增加 `handleCorrection`，先做**廉价预检查**（不打开账本），命中线索才读 state/suppressedIds，记录成功后 `injection.refresh()`，确保被指为错误的记忆不会在下一轮继续进入 Prompt；受设置主开关 `enabled` 控制。
+- 测试：新增 `correction-detect.test.mjs` 7 项（线索识别与日常表达区分、唯一目标成异议、歧义/无目标/弱命中/已撤回不动作、已在抑制列表不重复、真实 `createRuntimeStore` 下记录后立即 `suppressedIds`、存储失败与运行时不可用如实上报、duplicate 视为同结果、预检查成本）；`host.test` +1 端到端（预置一条真实记忆 → 触发 pre-step「这条 pnpm 记忆已经过时了」→ 运行时出现 `outdated` 异议且 `memory_id` 正确、reason 保留用户原话）；完整套件 **345/345 通过**；`git diff --check` 退出码 0。
+- 过程中发现并修正：最初版本对**每条**用户消息都读取 `service.state()`（会打开 Git 仓库），导致全套件并行时 3 个既有测试因资源竞争超时；加入廉价预检查后恢复 345/345。另修 `host.test` 新用例在 Windows 上删除临时 Git 仓库偶发 `EBUSY`（清理加重试，不是放宽断言）。
+- 未验证：真实会话中的识别准确率（无中文/英文真实样本集）；「太宽泛」类只记录异议但不进入 review_pending（`§6.3` 的分支尚未实现）；LLM 基于证据生成收窄提案的环节仍靠模型主动调用 `memory_propose`；浏览器端到端与新进程验证。
