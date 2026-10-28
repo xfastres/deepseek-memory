@@ -72,3 +72,10 @@ test('an over-long sentence is refused rather than truncated', () => {
   const long = '记住' + '啊'.repeat(250);
   assert.deepEqual(extractCandidates(long), []);
 });
+
+test('a negative style preference is a preference, found by the eval set', () => {
+  const found = extractCandidates('不要用红色主题，太刺眼。');
+  assert.equal(found.length, 1);
+  assert.equal(found[0].type, 'preference');
+  assert.equal(found[0].rule, 'preference');
+});

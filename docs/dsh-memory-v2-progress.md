@@ -993,3 +993,14 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 文档冲突状态更新：此前记录的“`persona.js` PERSONA_TYPES 含 `instruction` 而账本 MemoryType 不含”这一冲突，现在有了单一映射出口 `memory-types.js`；L3/persona 仍按 D11 后置，本轮不改 persona 语义。
 - 测试：新增 `memory-types.test.mjs` 3 项（账本类型原样通过、instruction→constraint、未知/缺失返回 null）；`http-app` +2（`instruction` 候选存储为 `constraint` 且接受成功、类型不合法时候选保持 pending 且账本零写入）；完整套件 **277/277 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上自动提取产生的指令候选（需真实对话与新进程）；生产 `runtime.json` 现有的 4 条候选均为 `fact`，未受此缺陷影响（只读核对，未修改）。
+
+### 迭代 17（2026-10-28，阶段 5.1：自动提取评估集与只读评估器）
+- 依据：`roadmap §12 阶段 5.1`（建立自动提取评估集，能衡量候选精确度、遗漏率和证据违规率）、`§13.1` 指标定义、`§14 D4/D6`（先评估再决定阈值/自动接受）。此前 4.3 的重叠阈值 0.6 与 4.4 的置信度阈值 0.6 都没有任何数据支撑。
+- 实现（全部只读、纯函数）：
+  - `packages/dsh-memory/eval/extraction-cases.mjs`：24 条人工编写的真实感句子（中文指令/偏好/决定/问句/假设/闲聊/不确定/多句/超长/中英混合），每条标注 `expect: candidate|none`、可选 `count` 与期望类型；英文用例带 `note: 'english'`，表示“这是已知规则覆盖缺口，不是可忽略的通过”。
+  - `eval/extraction-eval.mjs`：`evaluateExtraction(cases, {extract})` 按**候选条数**计分（tp=min(实得,应得)、fp、fn），输出 precision/recall、exact-count、类型分布（经 `toLedgerType` 归一为账本词汇）、`missed`/`extra` 明细；分母为 0 时返回 `null` 而不是伪造 0；`summariseExtraction` 输出单行摘要。
+  - `eval/run-extraction-eval.mjs`：只打印测量结果，退出码恒为 0（测量不是闸门）。
+- 评估立刻发现一处真实规则缺口并修复：`不要用红色主题，太刺眼。` 未被识别（偏好规则只有 `不要再|别用`，没有 `不要用`）。修复后测量从 `recall 80.0%` 提升到 `86.7%`，`precision` 保持 100%（24 例、应得 15、实得 13、exact-count 22/24）。
+- 当前仍存在的已知缺口（如实记录，不粉饰）：英文指令/偏好漏检（`english-instr`、`english-pref` 两例），因为规则只有中文标记；补英文规则需要单独设计与扩充用例，不属于本轮“只读测量”范围。证据违规率尚无法离线测量（需要真实会话 + 证据解析器），仍列为未验证项。
+- 测试：新增 `eval-extraction.test.mjs` 3 项（用例集结构完整性：id 唯一、正负样本各 ≥8、期望合法；计分器算术与空分母；**精度闸门**——不允许误报，不允许除已标注英文外的漏检）；`extraction.test.mjs` +1（负向偏好被识别，锁住本轮规则修复）；完整套件 **281/281 通过**；`git diff --check` 退出码 0。
+- 未验证：评估集是人工编写而非真实对话采样，阈值校准仍需真实样本；英文覆盖缺口未修；证据违规率、自动接受正确率（4.5 未启用）尚不可测。
