@@ -56,6 +56,17 @@ export class GitRepo {
       child.on('close', (code) => {
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
+        // Windows keeps the child's handles referenced after it exits, which
+        // holds the Host process's event loop open for every git call it ever
+        // made. The child is done here, so release the pipes and the handle.
+        try {
+          child.stdin?.destroy();
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.unref();
+        } catch {
+          // A handle already gone cannot hold anything open.
+        }
         if (code !== 0) reject(new GitError(`git ${args[0]} exited ${code}: ${stderr.trim()}`, { args, exitCode: code, stderr }));
         else resolve(stdout);
       });

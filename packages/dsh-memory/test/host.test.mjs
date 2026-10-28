@@ -138,21 +138,28 @@ test('the ping tool is a well-formed read-only tool definition', async () => {
   assert.match(blocks[0].text, /dsh-memory/);
 });
 
-test('apply registers both the route and the tool when services exist', () => {
+test('apply registers every route and the tool through the documented service access', () => {
   const registered = [];
   const tooled = [];
   const webServer = { register(route) { registered.push(route); return () => {}; } };
   const tools = { register(definition) { tooled.push(definition); return () => {}; } };
-  const lookup = { webServer, tools };
-  const scoped = {
-    get: (name) => lookup[name],
+  const ctx = {
+    get: (name) => ({ webServer, tools })[name],
     effect: (fn) => { fn(); return () => {}; },
   };
-  apply({ inject: (_deps, callback) => callback(scoped) });
+  apply(ctx);
   assert.equal(registered.length, 10);
   assert.equal(registered[0].path, PING_PATH);
   assert.equal(tooled.length, 1);
   assert.equal(tooled[0].name, 'dsh_memory_ping');
+});
+
+test('apply also works when services arrive as context properties', () => {
+  const registered = [];
+  const webServer = { register(route) { registered.push(route); return () => {}; } };
+  apply({ webServer });
+  assert.equal(registered.length, 10);
+  assert.equal(registered[0].path, PING_PATH);
 });
 
 test('apply never throws and registers the route once a web server exists', () => {
@@ -164,8 +171,7 @@ test('apply never throws and registers the route once a web server exists', () =
   assert.doesNotThrow(() => apply({ get: () => undefined }));
   assert.doesNotThrow(() => apply({ get: () => ({ register() { throw new Error('boom'); } }) }));
 
-  const scoped = { get: (name) => (name === 'webServer' ? webServer : undefined), effect: (fn) => { fn(); return () => {}; } };
-  apply({ inject: (_deps, callback) => callback(scoped) });
+  apply({ get: (name) => (name === 'webServer' ? webServer : undefined), effect: (fn) => { fn(); return () => {}; } });
   assert.equal(registered.length, 10);
   assert.equal(registered[0].path, PING_PATH);
 });

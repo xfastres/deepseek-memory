@@ -212,39 +212,44 @@ function keep(ctx, dispose) {
   if (ctx && typeof ctx.effect === 'function') ctx.effect(() => dispose, 'dsh-memory: host surface');
 }
 
-function registerRoutes(ctx) {
+/**
+ * Resolve a service both ways the Host documents: `ctx.get(name)` for the
+ * optional form and property access for the injected form. `undefined` means
+ * "not available here", never an exception.
+ */
+function service(ctx, name) {
+  if (!ctx) return undefined;
   try {
-    if (!ctx) return;
-    const webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : undefined;
-    if (!webServer || typeof webServer.register !== 'function') return;
-    const lookup = (name) => (typeof ctx.get === 'function' ? ctx.get(name) : undefined);
-    for (const route of createRoutes({ lookup })) keep(ctx, webServer.register(route));
+    if (typeof ctx.get === 'function') {
+      const value = ctx.get(name);
+      if (value !== undefined && value !== null) return value;
+    }
   } catch {
-    // A Host-half failure must never take the Harness down with it.
+    // Fall through to property access.
+  }
+  try {
+    return ctx[name];
+  } catch {
+    return undefined;
   }
 }
 
-function registerTool(ctx) {
-  try {
-    if (!ctx) return;
-    const tools = typeof ctx.get === 'function' ? ctx.get('tools') : undefined;
-    if (!tools || typeof tools.register !== 'function') return;
-    keep(ctx, tools.register(createPingTool()));
-  } catch {
-    // Same rule as above: stay loaded, stay silent.
-  }
-}
+/**
+ * Declared hard dependencies, the form other plugins in this profile use.
+ * `webServer` carries the routes, `tools` carries the ping tool.
+ */
+export const inject = ['webServer', 'tools'];
 
 export function apply(ctx) {
   try {
-    if (ctx && typeof ctx.inject === 'function') {
-      ctx.inject(['webServer'], (scoped) => registerRoutes(scoped));
-      ctx.inject(['tools'], (scoped) => registerTool(scoped));
-      return;
+    const webServer = service(ctx, 'webServer');
+    if (webServer && typeof webServer.register === 'function') {
+      const lookup = (name) => service(ctx, name);
+      for (const route of createRoutes({ lookup })) keep(ctx, webServer.register(route));
     }
-    registerRoutes(ctx);
-    registerTool(ctx);
+    const tools = service(ctx, 'tools');
+    if (tools && typeof tools.register === 'function') keep(ctx, tools.register(createPingTool()));
   } catch {
-    // Same rule as above: stay loaded, stay silent.
+    // A Host-half failure must never take the Harness down with it.
   }
 }
