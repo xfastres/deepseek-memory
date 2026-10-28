@@ -495,3 +495,25 @@ test('the migration summary counts every outcome and names the skip reasons', as
   const broken = plugin.migrationSummary(undefined, t);
   assert.match(broken, /新增 0/);
 });
+
+test("the ledger view marks status without rewriting the memory text", async () => {
+  const plugin = await loadPlugin();
+  const rows = plugin.ledgerView([
+    { id: "M-1", status: "active", content: "项目用 pnpm" },
+    { id: "M-2", status: "retracted", content: "旧的约定" },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].active, true);
+  assert.equal(rows[0].text, "项目用 pnpm", "the content is shown verbatim");
+  assert.equal(rows[1].active, false);
+  assert.equal(rows[1].status, "retracted");
+});
+
+test("the ledger view tolerates junk and bounds its length", async () => {
+  const plugin = await loadPlugin();
+  assert.deepEqual(plugin.ledgerView(undefined), []);
+  assert.deepEqual(plugin.ledgerView("not-an-array"), []);
+  assert.equal(plugin.ledgerView([{ id: "M-1" }])[0].text, "");
+  const many = Array.from({ length: 40 }, (_, index) => ({ id: "M-" + index, status: "active", content: "x" }));
+  assert.equal(plugin.ledgerView(many).length, 20);
+});

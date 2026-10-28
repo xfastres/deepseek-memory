@@ -38,6 +38,9 @@ window.__ModuleLoader__.load({
       migrateSummary: '导入完成：新增 {applied} 条，重复 {replayed} 条，失败 {failed} 条，跳过 {skipped} 条（{detail}）',
       migrateNoSkips: '无',
       migrateFailed: '导入失败：{reason}',
+      ledgerTitle: '记忆库内容（{count} 条）',
+      ledgerActive: '已生效',
+      ledgerInactive: '已撤回',
     };
     const en = {
       panel: 'Memory', title: 'Working memory', intro: "Today's interactions with your AI, with original text and sources.",
@@ -71,6 +74,9 @@ window.__ModuleLoader__.load({
       migrateSummary: 'Import finished: {applied} added, {replayed} already present, {failed} failed, {skipped} skipped ({detail})',
       migrateNoSkips: 'none',
       migrateFailed: 'Import failed: {reason}',
+      ledgerTitle: 'Memory store contents ({count})',
+      ledgerActive: 'active',
+      ledgerInactive: 'retracted',
     };
 
     const CANDIDATES_KEY = 'dsh-memory.candidates.v1';
@@ -841,6 +847,20 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /** Rows for the read-only ledger list: what the memory store actually holds. */
+    function ledgerView(memories, limit = 20) {
+      if (!Array.isArray(memories)) return [];
+      return memories.slice(0, limit).map((memory) => {
+        const status = memory && typeof memory.status === 'string' ? memory.status : 'unknown';
+        return {
+          id: memory && memory.id ? String(memory.id) : '',
+          text: memory && typeof memory.content === 'string' ? memory.content : '',
+          active: status === 'active',
+          status,
+        };
+      });
+    }
+
     function hostLine(host, t) {
       if (host.status === 'probing') return t('hostProbing');
       if (host.status === 'ok') {
@@ -883,6 +903,8 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('');
       const [ping, setPing] = useState('');
       const [host, setHost] = useState({ status: 'probing', count: 0, head: null, reason: '' });
+      /** Ledger contents read from the Host, shown read-only beside the local store. */
+      const [ledger, setLedger] = useState([]);
       const probeHost = () => {
         if (typeof fetch !== 'function') {
           setHost({ status: 'offline', count: 0, head: null, reason: 'no-fetch' });
@@ -891,8 +913,10 @@ window.__ModuleLoader__.load({
         setHost({ status: 'probing', count: 0, head: null, reason: '' });
         createHostClient(fetch).state().then((data) => {
           setHost({ status: 'ok', count: data.memories.length, head: data.head, reason: '' });
+          setLedger(data.memories);
         }, (error) => {
           setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
+          setLedger([]);
         });
       };
       useEffect(() => { probeHost(); }, []);
@@ -1058,6 +1082,11 @@ window.__ModuleLoader__.load({
           host.status === 'ok' && memories.length > 0
             ? h('button', { type: 'button', className: 'dm-refresh', onClick: migrateToHost }, t('migrateButton').replace('{count}', String(memories.length)))
             : null,
+          host.status === 'ok' && ledger.length > 0
+            ? h('section', { className: 'dm-ledger' },
+              h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(ledger.length))),
+              h('ul', { className: 'dm-muted' }, ledgerView(ledger).map((row) => h('li', { key: row.id }, `${row.active ? t('ledgerActive') : t('ledgerInactive')} · ${row.text}`))))
+            : null,
           ping ? h('p', { className: 'dm-muted', role: 'status' }, ping) : null,
           state.status === 'error'
             ? h('div', { className: 'dm-notice dm-error', role: 'alert' },
@@ -1213,6 +1242,7 @@ window.__ModuleLoader__.load({
       reviewView,
       createHostClient,
       hostLine,
+      ledgerView,
       migrationSummary,
       mergeDraft,
       editMemory,
