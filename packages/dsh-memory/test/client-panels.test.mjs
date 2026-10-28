@@ -681,3 +681,18 @@ test('proposal decisions send the proposal id, the action, and only a real base 
     assert.notEqual(t(key), key, 'missing zh text for ' + key);
   }
 });
+
+test('a new wording asks the Host to clear the review objection it answers', async () => {
+  const { plugin } = await load();
+  const calls = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+  });
+  await client.update({ memoryId: 'M-1', content: '新表述', expectedBaseChangeId: 'c-1', clearObjection: true });
+  await client.update({ memoryId: 'M-1', content: '普通修改', expectedBaseChangeId: 'c-1' });
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    memoryId: 'M-1', content: '新表述', expectedBaseChangeId: 'c-1', clearObjection: true,
+  });
+  assert.equal(JSON.parse(calls[1].init.body).clearObjection, undefined, 'an ordinary edit does not claim to answer anything');
+});

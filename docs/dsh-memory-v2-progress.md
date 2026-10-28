@@ -1125,3 +1125,11 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：`corrections` +1（核查类映射，4 个「停止」类明确为 false）；`runtime-store` +1（核查类进 reviewPending、两类都被抑制、恢复后清空）；`auto-memory` +1（同一句被核查时不再自动接受；不同句子不受影响）；`http-app` +1（`review_pending` 与 `suppressed` 同时包含该记忆）；完整套件 **349/349 通过**；`git diff --check` 退出码 0。
 - 文档冲突（未擅自解决）：`roadmap §6.2` 的异议类型名是 `incorrect / too_broad / outdated / missing_context / wrong_scope / duplicate / should_not_store / delete_request / other`，而实现（`corrections.js`，已被 UI/API/测试使用）是 `wrong / too_broad / outdated / missing_context / wrong_scope / duplicate / should_not_save / delete`，且没有 `other`。两者语义对应但命名不同；改名会破坏已发布接口，本轮只记录不改。
 - 未验证：浏览器实际显示与交互（徽标渲染未在浏览器验证，`useEffect` 测试桩不执行异步加载）；核查类异议是否应在某些情形临时保留注入（§6.3 说「按风险决定」），当前一律抑制，属偏安全的选择；真实会话中的识别准确率。
+
+### 迭代 29（2026-10-28，阶段 6 核查结果的出口）
+- 依据：`roadmap §6.3`（核查→生成变更提案→用户确认/自动策略→写入）、`§6.5`（用户手动修改也必须走统一 Writer）、上一轮遗留「待核查记忆只能被恢复或继续抑制，没有『确认收窄表述』的出口」。缺口证据：`/update` 与异议状态互不相干，用户改对内容后记忆仍被抑制，只能再点一次「恢复使用」。
+- 实现：
+  - `host/http-app.js`：`POST /update` 支持可选 `clearObjection: true`——先走既有单一 Writer（`expectedBaseChangeId` 不变），成功后再调用 `runtime.reinstate(memoryId)`，响应带 `objection_cleared`；没有活动异议时按 `false` 返回而不是报错（幂等、不把「无事可清」变成失败）。
+  - `client.js`：Host 客户端 `update` 支持该字段；保存编辑时仅当该行处于 `review_pending` 才带 `clearObjection`；「待核查」行的恢复按钮文案改为「接受现状」（`acceptAsIs`），与「已抑制」行的「恢复使用」区分语义。
+- 测试：`http-app` +1（异议存在 → 带 `clearObjection` 修改后 `suppressed`/`review_pending` 清空；不带字段的修改不影响异议；本无异议时返回 `objection_cleared: false` 且 200）；`client-panels` +1（请求体只在要求时携带该字段，普通编辑不携带）；完整套件 **351/351 通过**；`git diff --check` 退出码 0。
+- 未验证：浏览器端到端（新按钮文案与自动带字段的交互未在浏览器验证）；「接受现状」是否应同时写入一条「核查结论」记录（当前只清除异议，没有留痕；roadmap 未明确要求）；并发：两个窗口同时修改同一记忆仍由既有 `expectedBaseChangeId` 保护，未新增测试。

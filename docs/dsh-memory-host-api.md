@@ -93,6 +93,8 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> 修正即回应异议（§6.5）：`POST /update` 可选 `clearObjection: true`，写入成功后清除该记忆的活动异议（响应带 `objection_cleared`；本就没有异议不算错误，返回 `false`）。未带该字段的普通修改不改变异议状态。面板对「待核查」行提供「接受现状」（等价于 `POST /objections/clear`），以及在编辑保存时自动带上 `clearObjection`。
+
 > 核查类异议（§6.3）：`too_broad`/`missing_context`/`wrong_scope`/`duplicate` 是「请重新核查」而不是「判为错误」，`GET /objections` 因此额外返回 `review_pending`（这些记忆的 id 数组）。它们**同时仍在 `suppressed` 中**：未核查清楚的记忆不得被当作已确认结论；面板对这类行显示「待核查」。自动接受路径拿不到这些记忆的重新激活权：`decideAutoMemory` 遇到「正文与待核查记忆相同」的候选直接降为 `REVIEW_REQUIRED`（`reasons: ['objected-memory']`）。
 
 > 自然语言纠错（§6.1–6.4，宿主内部行为，无新路由）：`host/correction-detect.js` 判定用户这句话是否是针对某条记忆的纠错（必须有纠错线索 + 提到「记忆/记录」），再用与注入相同的词面评分找目标：只有**唯一且明显**的目标才记录异议（`runtime.addObjection`，8 种类型之一），随即由既有 D7 抑制进入检索过滤；目标有歧义（两条评分接近）、词面无匹配、目标已撤回/已异议时不动作，等用户在面板选择。异议是运行时数据，不是账本写入；存储失败会记录在 `contextState.lastCorrection`，不谎称已修改。由设置里的主开关 `enabled` 控制，与自动提取一致。

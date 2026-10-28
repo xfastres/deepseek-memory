@@ -301,7 +301,19 @@ export function createMemoryApp(options = {}) {
           content,
           expectedBaseChangeId: typeof body.expectedBaseChangeId === 'string' ? body.expectedBaseChangeId : null,
         });
-        writeJson(res, 200, { ok: true, ...result });
+        // The new wording answers the objection (§6.5): the user may ask for it
+        // to be cleared in the same request, so the memory is not left hidden
+        // after they fixed it. A memory with no objection is not an error.
+        let cleared = false;
+        if (body.clearObjection === true) {
+          try {
+            await runtime.reinstate(body.memoryId);
+            cleared = true;
+          } catch (error) {
+            if (!(error !== null && typeof error === 'object' && error.code === 'missing')) throw error;
+          }
+        }
+        writeJson(res, 200, { ok: true, ...result, objection_cleared: cleared });
       } catch (error) {
         fail(res, error);
       }

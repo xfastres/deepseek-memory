@@ -947,3 +947,44 @@ test('objections tell the reader which memories are waiting for a review', async
     assert.deepEqual(listed.json.suppressed, [memory.id], 'and it is still hidden until reviewed');
   });
 });
+
+test('a corrected wording ends the objection it answers, in the same write', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+    const memory = await addMemory(app, '项目使用 pnpm');
+    await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId: memory.id, kind: 'too_broad', reason: '太宽泛' },
+    });
+    assert.deepEqual((await call(app, '/api/dsh-memory/objections')).json.suppressed, [memory.id]);
+
+    const updated = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: {
+        memoryId: memory.id,
+        content: '项目使用 pnpm 管理依赖（仅限本项目）',
+        expectedBaseChangeId: memory.last_change_id,
+        clearObjection: true,
+      },
+    });
+    assert.equal(updated.status, 200);
+    assert.equal(updated.json.objection_cleared, true);
+    const listed = await call(app, '/api/dsh-memory/objections');
+    assert.deepEqual(listed.json.suppressed, [], 'the fixed memory is usable again');
+    assert.deepEqual(listed.json.review_pending, []);
+
+    const plain = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId: memory.id, content: '项目使用 pnpm 管理依赖', expectedBaseChangeId: updated.json.memory ? updated.json.change_id : null },
+    });
+    assert.equal(plain.status, 200);
+    assert.equal(plain.json.objection_cleared, false, 'a write that does not ask to clear leaves objections alone');
+
+    const noObjection = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId: memory.id, content: '项目使用 pnpm 管理依赖（最终）', expectedBaseChangeId: plain.json.change_id, clearObjection: true },
+    });
+    assert.equal(noObjection.status, 200);
+    assert.equal(noObjection.json.objection_cleared, false, 'nothing to clear is not an error');
+  });
+});

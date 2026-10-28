@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
       origin: '来源', originRule: '自动提取', originUser: '用户手动', originLegacy: '旧数据迁移', originLlm: '模型建议',
       sourceKindUserExplicit: '用户明确', sourceKindUserCorrection: '用户纠正', sourceKindSessionExtraction: '会话提取', sourceKindAgentInference: '模型推断',
       decisionNew: '新增', decisionDuplicate: '与现有记忆相同', decisionConflict: '需与现有记忆合并', decisionTarget: '参照 {id}',
-      object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reviewPendingBadge: '待核查', reinstate: '恢复使用', objectKind: '问题类型',
+      object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reviewPendingBadge: '待核查', reinstate: '恢复使用', acceptAsIs: '接受现状', objectKind: '问题类型',
       candidateProposed: '已提出', candidateValidating: '校验中', candidateReviewPending: '待复核', candidateAutoAccepted: '自动接受',
       proposalsTitle: 'AI 提案（{count}）', proposalsHint: '来自模型的修改建议：接受才会写入账本，且按你看到的版本校验。',
       proposalsEmpty: '没有待处理的提案。', proposalAccept: '接受提案', proposalReject: '拒绝提案',
@@ -137,7 +137,8 @@ window.__ModuleLoader__.load({
       origin: 'Origin', originRule: 'auto-extracted', originUser: 'added by user', originLegacy: 'legacy import', originLlm: 'model suggestion',
       sourceKindUserExplicit: 'stated by user', sourceKindUserCorrection: 'user correction', sourceKindSessionExtraction: 'session extraction', sourceKindAgentInference: 'agent inference',
       decisionNew: 'new', decisionDuplicate: 'same as an existing memory', decisionConflict: 'needs merging with an existing memory', decisionTarget: 'refers to {id}',
-      object: 'mark wrong', objectConfirm: 'confirm: mark wrong', objected: 'suppressed', reviewPendingBadge: 'needs review', reinstate: 'restore', objectKind: 'problem',
+      object: 'mark wrong', objectConfirm: 'confirm: mark wrong', objected: 'suppressed', reviewPendingBadge: 'needs review', acceptAsIs: 'keep as is',
+      reinstate: 'restore', objectKind: 'problem',
       candidateProposed: 'proposed', candidateValidating: 'validating', candidateReviewPending: 'needs review', candidateAutoAccepted: 'auto-accepted',
       proposalsTitle: 'AI proposals ({count})', proposalsHint: 'Suggestions from the model: nothing is written until you accept, checked against the version you see.',
       proposalsEmpty: 'No open proposals.', proposalAccept: 'Accept proposal', proposalReject: 'Reject proposal',
@@ -1007,8 +1008,9 @@ window.__ModuleLoader__.load({
           });
         },
         /** Change one ledger memory through the single writer; the base change id detects stale edits. */
-        async update({ memoryId, content, expectedBaseChangeId }) {
+        async update({ memoryId, content, expectedBaseChangeId, clearObjection }) {
           const body = { memoryId, content };
+          if (clearObjection === true) body.clearObjection = true;
           if (typeof expectedBaseChangeId === 'string' && expectedBaseChangeId !== '') body.expectedBaseChangeId = expectedBaseChangeId;
           return post('/update', body);
         },
@@ -1817,7 +1819,13 @@ window.__ModuleLoader__.load({
         const content = String(ledgerDraft.content ?? '').trim();
         if (content === '') { setLedgerDraft({ ...ledgerDraft, error: 'emptyContent' }); return; }
         setLedgerPending(true);
-        createHostClient(fetch).update({ memoryId: ledgerDraft.id, content, expectedBaseChangeId: ledgerDraft.changeId }).then(() => {
+        const answered = objections.reviewPending.includes(ledgerDraft.id);
+        createHostClient(fetch).update({
+          memoryId: ledgerDraft.id,
+          content,
+          expectedBaseChangeId: ledgerDraft.changeId,
+          clearObjection: answered,
+        }).then(() => {
           setLedgerPending(false);
           setLedgerDraft(null);
           setNotice(t('saved'));
@@ -1921,7 +1929,7 @@ window.__ModuleLoader__.load({
               ? h('span', { className: 'dm-badge dm-badge-pending' }, t('reviewPendingBadge'))
               : null,
             row.active && objections.suppressed.includes(row.id)
-              ? h('button', { type: 'button', className: 'dm-link', disabled: ledgerPending, onClick: () => reinstateObjection(row.id) }, t('reinstate'))
+              ? h('button', { type: 'button', className: 'dm-link', disabled: ledgerPending, onClick: () => reinstateObjection(row.id) }, t(objections.reviewPending.includes(row.id) ? 'acceptAsIs' : 'reinstate'))
               : null,
             row.active && !objections.suppressed.includes(row.id)
               ? (objectingId === row.id
