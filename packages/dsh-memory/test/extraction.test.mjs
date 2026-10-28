@@ -79,3 +79,37 @@ test('a negative style preference is a preference, found by the eval set', () =>
   assert.equal(found[0].type, 'preference');
   assert.equal(found[0].rule, 'preference');
 });
+
+test('English sentences are extracted with the same rules and shape', () => {
+  const rows = extractCandidates('Please remember that the project uses pnpm. I prefer short answers over long explanations.');
+  assert.equal(rows.length, 2, 'both sentences are durable and both fit under the per-turn cap');
+  assert.equal(rows[0].type, 'instruction');
+  assert.equal(rows[0].rule, 'instruction-en');
+  assert.equal(rows[1].type, 'preference');
+  assert.equal(rows[1].rule, 'preference-en');
+  for (const row of rows) {
+    assert.equal(typeof row.confidence, 'number');
+    assert.ok(row.matched.length > 0, 'review can still say why it appeared');
+  }
+
+  const decision = extractCandidates('We decided to use the Git ledger.');
+  assert.equal(decision.length, 1);
+  assert.equal(decision[0].type, 'decision');
+  assert.equal(decision[0].rule, 'decision-en');
+});
+
+test('English questions, hypotheticals and uncertainty do not become memories', () => {
+  assert.deepEqual(extractCandidates('Which package manager should we use?'), []);
+  assert.deepEqual(extractCandidates('Should we use pnpm?'), []);
+  assert.deepEqual(extractCandidates('If we remember to use pnpm, it works.'), []);
+  assert.deepEqual(extractCandidates('Suppose we prefer pnpm.'), []);
+  const unsure = extractCandidates('Maybe I prefer short answers.');
+  assert.equal(unsure.length, 1);
+  assert.ok(unsure[0].confidence < 0.7, 'uncertainty lowers confidence instead of hiding it');
+});
+
+test('the matcher is case-insensitive because the rebuilt regex keeps its flags', () => {
+  const rows = extractCandidates('REMEMBER TO USE PWSh FOR TESTS');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].type, 'instruction');
+});

@@ -1073,3 +1073,13 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：新增 `search.test.mjs` 6 项（命中并带证据；retracted/superseded/过期/private/他 scope/过短全部隐藏且计数；异议不可搜；空查询与非词面不返回；排序/类型过滤/上限；工具正常、无 Host、异议查询失败、状态失败四种路径）；`ledger-service` +1（状态行带 `valid_to`/`sensitivity`/`tags`/`entities`）；完整套件 **331/331 通过**；`git diff --check` 退出码 0。
 - 文档冲突（如实记录，未擅自解决）：roadmap `§11` 要求 private 记忆不被 AI 搜索，但 `provider-git-ledger/src/schema.js` 的 `validateMemory` **没有 `sensitivity` 字段**，Writer 也无法写入，因此该限制目前只能对「已有该标记的记录」生效，属于**未实现**；`tags`/`entities` 同样在 schema 中但 `ledger-service.add` 不接收，故搜索暂无法按标签命中。二者都需作为数据格式决策单独确认，本轮不扩 schema。
 - 未验证：真实宿主中的工具调用与权限过滤效果；浏览器无此入口（工具仅面向模型）。
+
+### 迭代 25（2026-10-28，阶段 L1：英文会话的候选提炼）
+- 依据：L1「从用户自己的话提取原子记忆」不限定语言；`eval/extraction-cases.mjs` 已包含 4 条 `note: 'english'` 用例，说明双语是既定验收的一部分。缺口证据：`extraction.test` 通过时`english-pref` 用例在评测中 `diff want 1, got 0`——`host/extraction.js` 的规则、拒答词、分句全部是中文正则，英文消息**一条候选都提不出来**。
+- 实现（`packages/dsh-memory/host/extraction.js`）：
+  - 新增三条英文规则（`instruction-en`/`decision-en`/`preference-en`），置信度与中文对应规则一致，输出候选形状不变（`text/type/confidence/rule/matched`）；中文规则一个字符未动；
+  - 拒答扩展：英文疑问开头（`what/why/how/...`）、英文假设（`if/suppose/assuming`）；`maybe/perhaps/might` 不隐藏候选而是降置信度，与中文 `也许/可能` 的既有处理一致；
+  - 分句增加英文句号后空白（`.s+`），否则整段英文是一条超长句、被长度上限直接丢弃。
+- 顺带修复真实缺陷：组装规则正则时 `new RegExp(source, 'gu')` 丢掉了源正则的 `i` 标志，英文大小写敏感、几乎不命中；改为 `'giu'`。该缺陷由评测用例暴露，不是靠猜。
+- 测试：`extraction.test` +3（英文指令/偏好/决定按同一形状产出且带 matched；英文疑问/假设被拒、`maybe` 只降置信度；大写英文仍命中，锁定标志位缺陷）；评测 CLI：`cases 24 · expected 15 · extracted 15 · precision 100.0% · recall 100.0% · exact-count 24/24`（改动前 `english-pref` 为 diff，共 1 处偏差）；完整套件 **334/334 通过**；`git diff --check` 退出码 0。
+- 未验证：英文规则只在这 24 条评测集（其中英文 4 条）上校准，真实英文会话的误报率未知；英文缩写（如 `e.g.`）会被分句切开；真实宿主端到端未跑。

@@ -11,8 +11,12 @@
 
 /** Sentences that are not statements of intent, whatever they contain. */
 const QUESTION = /[？?]\s*$|(吗|呢|是不是|好不好|行不行|对不对)\s*$/u;
+/** An English sentence that starts with an interrogative is still a question. */
+const QUESTION_EN = /^\s*(what|why|how|when|where|who|which|can|could|should|would|do|does|did|is|are|will|shall|may)\b/iu;
 const HYPOTHETICAL = /(如果|假如|假设|万一|要是|倘若|若是)/u;
+const HYPOTHETICAL_EN = /\b(if|suppose|supposing|assuming|what if|in case)\b/iu;
 const UNCERTAIN = /(也许|可能|大概|或许|不一定|不确定)/u;
+const UNCERTAIN_EN = /\b(maybe|perhaps|probably|might|not sure|unsure|i think|i guess)\b/iu;
 
 /** Delay markers: the claim is being deferred, not asserted. */
 const RULES = [
@@ -21,6 +25,26 @@ const RULES = [
     type: 'instruction',
     confidence: 0.85,
     pattern: /(记住|记一下|记下|别忘了|下次记得|下次要|以后记住)/u,
+  },
+  {
+    // English instruction. A separate rule keeps the reviewed Chinese pattern
+    // byte-for-byte intact; both produce the same candidate shape.
+    name: 'instruction-en',
+    type: 'instruction',
+    confidence: 0.85,
+    pattern: /\b(remember|don't forget|do not forget|keep in mind|note that|from now on|going forward)\b/iu,
+  },
+  {
+    name: 'decision-en',
+    type: 'decision',
+    confidence: 0.75,
+    pattern: /\b(we (decided|chose|will use|are using)|let's use|lets use|settled on|decided to|going with)\b/iu,
+  },
+  {
+    name: 'preference-en',
+    type: 'preference',
+    confidence: 0.7,
+    pattern: /\b(i prefer|i'd prefer|i would prefer|i like|i'd rather|i usually|i always|always use|never use|please use|please keep|prefer to)\b/iu,
   },
   {
     name: 'decision',
@@ -43,7 +67,7 @@ const MAX_PER_TURN = 3;
 export function sentences(text) {
   if (typeof text !== 'string') return [];
   return text
-    .split(/[。！？!?；;\n]+/u)
+    .split(/[。！？!?；;\n]+|\.\s+/u)
     .map((part) => part.trim())
     .filter((part) => part !== '');
 }
@@ -51,8 +75,8 @@ export function sentences(text) {
 /** Why a sentence is refused, or undefined when it may become a candidate. */
 export function refusal(sentence) {
   if (typeof sentence !== 'string' || sentence.trim() === '') return 'empty';
-  if (QUESTION.test(sentence)) return 'question';
-  if (HYPOTHETICAL.test(sentence)) return 'hypothetical';
+  if (QUESTION.test(sentence) || QUESTION_EN.test(sentence)) return 'question';
+  if (HYPOTHETICAL.test(sentence) || HYPOTHETICAL_EN.test(sentence)) return 'hypothetical';
   return undefined;
 }
 
@@ -80,7 +104,10 @@ export function extractCandidates(text, options = {}) {
 
     let best;
     for (const rule of RULES) {
-      const matches = sentence.match(new RegExp(rule.pattern.source, 'gu'));
+      // The flags of the source regex are lost when it is rebuilt, so `i`
+      // must be asked for explicitly: English instructions are matched in
+      // either case.
+      const matches = sentence.match(new RegExp(rule.pattern.source, 'giu'));
       if (matches === null) continue;
       if (best === undefined || rule.confidence > best.rule.confidence) {
         best = { rule, matched: [...new Set(matches)] };
@@ -94,7 +121,7 @@ export function extractCandidates(text, options = {}) {
 
     let confidence = best.rule.confidence;
     if (/(一定|永远|始终|务必|必须)/u.test(sentence)) confidence += 0.05;
-    if (UNCERTAIN.test(sentence)) confidence -= 0.15;
+    if (UNCERTAIN.test(sentence) || UNCERTAIN_EN.test(sentence)) confidence -= 0.15;
     confidence = Math.max(0.3, Math.min(0.95, Number(confidence.toFixed(2))));
 
     found.push({
