@@ -286,3 +286,39 @@ test('only the message produced by the evidence event is highlighted', async () 
   assert.equal(plugin.messageClass(messages[0], 99), 'dm-message dm-message-you');
   assert.equal(t('evidenceLocated').includes('高亮'), true);
 });
+
+test('ledger edits and retractions go through the Host writer with base change ids', async () => {
+  const { plugin } = await load();
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, status: 'applied', change_id: 'c-2' }) };
+  };
+  const client = plugin.createHostClient(fetchImpl);
+  await client.update({ memoryId: 'M-1', content: '新内容', expectedBaseChangeId: 'c-1' });
+  assert.equal(calls[0].url, 'api/dsh-memory/update');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers['content-type'], 'application/json');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { memoryId: 'M-1', content: '新内容', expectedBaseChangeId: 'c-1' });
+
+  await client.retract({ memoryId: 'M-1', expectedBaseChangeId: 'c-1' });
+  assert.equal(calls[1].url, 'api/dsh-memory/retract');
+  assert.deepEqual(JSON.parse(calls[1].init.body), { memoryId: 'M-1', expectedBaseChangeId: 'c-1' });
+  await client.retract({ memoryId: 'M-1' });
+  assert.deepEqual(JSON.parse(calls[2].init.body), { memoryId: 'M-1' }, 'absent optionals are omitted, not sent as null');
+
+  const conflict = plugin.createHostClient(async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ ok: false, error: 'stale' }) }));
+  await assert.rejects(() => conflict.update({ memoryId: 'M-1', content: 'x' }), (error) => error.reason === 'stale');
+  const forbidden = plugin.createHostClient(async () => ({ ok: false, status: 403, text: async () => 'no' }));
+  await assert.rejects(() => forbidden.retract({ memoryId: 'M-1' }), (error) => error.reason === 'forbidden');
+});
+
+test('ledger rows keep the change id and version the writer needs', async () => {
+  const { plugin } = await load();
+  const rows = plugin.ledgerView([{ id: 'M-1', status: 'active', content: 'x', type: 'fact', last_change_id: 'c-9', version: 3 }]);
+  assert.equal(rows[0].changeId, 'c-9');
+  assert.equal(rows[0].version, 3);
+  const bare = plugin.ledgerView([{ id: 'M-2', status: 'active', content: 'y', type: 'fact' }]);
+  assert.equal(bare[0].changeId, null);
+  assert.equal(bare[0].version, null);
+});

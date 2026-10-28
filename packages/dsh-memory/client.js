@@ -48,6 +48,9 @@ window.__ModuleLoader__.load({
       evidenceUnavailable: '无法定位原始证据：该会话可能已不可用。',
       evidenceOutside: '该事件不在可读取的会话历史中。',
       evidenceLocated: '已定位到产生这条记忆的用户消息（高亮显示）。',
+      retract: '撤回', confirmRetract: '确认撤回', retracted: '已撤回，历史版本仍保留。',
+      retractFailed: '撤回未完成：{reason}', versionChanged: '账本已变化，请刷新后重试。',
+      hostBusy: '账本正在写入，请稍后重试。', missingMemory: '这条记忆在账本中已不存在。',
       search: '搜索记忆…', filterType: '类型', filterStatus: '状态', filterAll: '全部',
       filterEmpty: '没有匹配这些筛选条件的记忆。', searchClear: '清除搜索',
       traceTitle: '注入追踪（{count}）', traceHint: '只读审计 · 不包含记忆正文 · 展开时才读取',
@@ -101,6 +104,9 @@ window.__ModuleLoader__.load({
       evidenceUnavailable: 'Could not locate the evidence: that Session may be unavailable.',
       evidenceOutside: 'That event is not inside the readable Session history.',
       evidenceLocated: 'Located the user message that produced this memory (highlighted).',
+      retract: 'Retract', confirmRetract: 'Confirm retraction', retracted: 'Retracted; history is still kept.',
+      retractFailed: 'Retraction failed: {reason}', versionChanged: 'The ledger changed; refresh and retry.',
+      hostBusy: 'The ledger is writing; retry in a moment.', missingMemory: 'This memory no longer exists in the ledger.',
       search: 'Search memories…', filterType: 'Type', filterStatus: 'Status', filterAll: 'All',
       filterEmpty: 'No memories match these filters.', searchClear: 'Clear search',
       traceTitle: 'Injection trace ({count})', traceHint: 'Read-only audit · no memory bodies · loaded on expand',
@@ -950,6 +956,19 @@ window.__ModuleLoader__.load({
             candidates: Array.isArray(legacy.candidates) ? legacy.candidates : [],
           });
         },
+        /** Change one ledger memory through the single writer; the base change id detects stale edits. */
+        async update({ memoryId, content, expectedBaseChangeId }) {
+          const body = { memoryId, content };
+          if (typeof expectedBaseChangeId === 'string' && expectedBaseChangeId !== '') body.expectedBaseChangeId = expectedBaseChangeId;
+          return post('/update', body);
+        },
+        /** Retract instead of deleting: the ledger keeps the history. */
+        async retract({ memoryId, expectedBaseChangeId, reason }) {
+          const body = { memoryId };
+          if (typeof expectedBaseChangeId === 'string' && expectedBaseChangeId !== '') body.expectedBaseChangeId = expectedBaseChangeId;
+          if (typeof reason === 'string' && reason !== '') body.reason = reason;
+          return post('/retract', body);
+        },
       };
     }
 
@@ -966,6 +985,8 @@ window.__ModuleLoader__.load({
           // Only forwarded when the ledger actually stored it; never invented.
           type: memory && typeof memory.type === 'string' ? memory.type : null,
           refs: evidenceRefsOf(memory),
+          changeId: memory && typeof memory.last_change_id === 'string' ? memory.last_change_id : null,
+          version: memory && Number.isInteger(memory.version) ? memory.version : null,
           scope: memory && typeof memory.scope === 'string' ? memory.scope : null,
         };
       });
@@ -1364,6 +1385,74 @@ window.__ModuleLoader__.load({
             ? h('button', { type: 'button', className: 'dm-link', onClick: () => { setQuery(''); setTypeFilter(''); } }, t('searchClear'))
             : null)
         : null;
+      /** Ledger edit and retract go through the Host writer; nothing is written locally. */
+      const [ledgerDraft, setLedgerDraft] = useState(null);
+      const [retractId, setRetractId] = useState(null);
+      const [ledgerPending, setLedgerPending] = useState(false);
+      const ledgerError = (reason) => (reason === 'stale' ? 'versionChanged'
+        : reason === 'busy' || reason === 'ledger-dirty' ? 'hostBusy'
+          : reason === 'missing' ? 'missingMemory' : 'saveFailed');
+      const saveLedgerEdit = () => {
+        if (!ledgerDraft || ledgerPending || typeof fetch !== 'function') return;
+        const content = String(ledgerDraft.content ?? '').trim();
+        if (content === '') { setLedgerDraft({ ...ledgerDraft, error: 'emptyContent' }); return; }
+        setLedgerPending(true);
+        createHostClient(fetch).update({ memoryId: ledgerDraft.id, content, expectedBaseChangeId: ledgerDraft.changeId }).then(() => {
+          setLedgerPending(false);
+          setLedgerDraft(null);
+          setNotice(t('saved'));
+          probeHost();
+        }, (error) => {
+          setLedgerPending(false);
+          setLedgerDraft((old) => (old ? { ...old, error: ledgerError(error && error.reason) } : old));
+        });
+      };
+      const retractLedger = (row) => {
+        if (ledgerPending || typeof fetch !== 'function') return;
+        setLedgerPending(true);
+        createHostClient(fetch).retract({ memoryId: row.id, expectedBaseChangeId: row.changeId }).then(() => {
+          setLedgerPending(false);
+          setRetractId(null);
+          setNotice(t('retracted'));
+          probeHost();
+        }, (error) => {
+          setLedgerPending(false);
+          setRetractId(null);
+          setNotice(t('retractFailed').replace('{reason}', String((error && error.reason) || 'network')));
+        });
+      };
+      const ledgerItem = (row) => h('li', { key: row.id, className: 'dm-ledger-row' },
+        h('div', { className: 'dm-ledger-line' },
+          h('span', { className: 'dm-type dm-type-' + (row.type === 'constraint' ? 'constraint' : 'plain') }, row.type === null ? t('notProvided') : row.type),
+          h('span', { className: 'dm-muted' }, (row.active ? t('ledgerActive') : t('ledgerInactive')) + ' · ' + row.text)),
+        ledgerDraft && ledgerDraft.id === row.id
+          ? h('form', {
+            className: 'dm-ledger-edit',
+            onSubmit: (event) => { event.preventDefault(); saveLedgerEdit(); },
+          },
+            h('textarea', {
+              className: 'dm-textarea',
+              value: ledgerDraft.content,
+              rows: 4,
+              onChange: (event) => setLedgerDraft({ ...ledgerDraft, content: event.target.value, error: '' }),
+            }),
+            h('div', { className: 'dm-review-actions' },
+              h('button', { type: 'submit', className: 'dm-refresh', disabled: ledgerPending || textSubmitDisabled(ledgerDraft.content) }, t('saveEdit')),
+              h('button', { type: 'button', className: 'dm-back', onClick: () => setLedgerDraft(null) }, t('cancel'))),
+            ledgerDraft.error ? h('p', { className: 'dm-muted', role: 'alert' }, t(ledgerDraft.error)) : null)
+          : h('div', { className: 'dm-ledger-actions' },
+            ledgerEvidenceButton(row, t, openEvidence),
+            row.active
+              ? h('button', { type: 'button', className: 'dm-link', onClick: () => setLedgerDraft({ id: row.id, content: row.text, changeId: row.changeId, error: '' }) }, t('edit'))
+              : null,
+            row.active && retractId === row.id
+              ? h(React.Fragment, null,
+                h('button', { type: 'button', className: 'dm-link dm-danger', disabled: ledgerPending, onClick: () => retractLedger(row) }, t('confirmRetract')),
+                h('button', { type: 'button', className: 'dm-link', onClick: () => setRetractId(null) }, t('cancel')))
+              : row.active
+                ? h('button', { type: 'button', className: 'dm-link', onClick: () => setRetractId(row.id) }, t('retract'))
+                : null));
+
       if (evidence.status === 'ready' && evidence.turn) {
         return h('section', { className: 'dm-page' },
           h(ConversationView, {
@@ -1450,9 +1539,7 @@ window.__ModuleLoader__.load({
           host.status === 'ok' && shownLedger.length > 0
             ? h('section', { className: 'dm-ledger' },
               h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(shownLedger.length))),
-              h('ul', { className: 'dm-ledger-list' }, shownLedger.map((row) => h('li', { key: row.id }, ledgerEvidenceButton(row, t, openEvidence),
-                h('span', { className: `dm-type dm-type-${row.type === 'constraint' ? 'constraint' : 'plain'}` }, row.type === null ? t('notProvided') : row.type),
-                h('span', { className: 'dm-muted' }, `${row.active ? t('ledgerActive') : t('ledgerInactive')} · ${row.text}`)))))
+              h('ul', { className: 'dm-ledger-list' }, shownLedger.map((row) => ledgerItem(row))))
             : null,
           h(InjectionPanel, { t }),
           ping ? h('p', { className: 'dm-muted', role: 'status' }, ping) : null,
@@ -1690,6 +1777,11 @@ window.__ModuleLoader__.load({
       .dm-evidence{margin-top:8px}
       .dm-evidence-located{margin:10px 0 0}
       .dm-message-hit{outline:2px solid var(--dm-accent);outline-offset:2px}
+      .dm-ledger-row{flex-wrap:wrap}
+      .dm-ledger-line{display:flex;gap:10px;align-items:baseline;min-width:0;flex:1 1 auto}
+      .dm-ledger-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-left:auto}
+      .dm-ledger-edit{flex:1 1 100%;margin-top:8px}
+      .dm-link.dm-danger{color:var(--dm-danger)}
       .dm-ledger-list li .dm-link{margin-left:auto}
       .dm-type{display:inline-block;margin-right:10px;padding:1px 8px;border-radius:999px;border:1px solid var(--dm-border-strong);font-size:11px;color:var(--dm-text-dim);white-space:nowrap}
       .dm-type-constraint{color:var(--dm-purple);border-color:#3b2f66;background:#1a1430}

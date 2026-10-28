@@ -917,3 +917,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：`conversationMessages` 为 you/assistant 消息附加真实 `seq`；新增 `messageClass`（仅当 seq 精确匹配才加 `dm-message-hit`，seq 缺失或整数不匹配一律不加）；`ConversationView` 接受 `highlightSeq`，证据视图传入引用中的 `event_seq`，并在消息列表上方显示"已定位到产生这条记忆的用户消息（高亮显示）"；样式新增 2px 主题色描边。
 - 测试：`client-panels` +1（15 项，覆盖匹配/不匹配/缺失三种情况与提示文案）；完整套件 **243/243 通过**；`git diff --check` 退出码 0。
 - 未验证：浏览器中的高亮外观与是否需要滚动到命中位置；真实宿主旧会话的证据跳转未点击验证。
+
+### 迭代 7（2026-10-28，L1 / 阶段 3.7：账本记忆经单一 Writer 编辑与撤回）
+- 依据：roadmap §3.1"Client UI 不直接写 Git 文件"、决策 D8（用户与 AI 修改统一走 Writer）、§12 阶段 3.7（变更走 Host API、Writer、Git 与索引更新的统一流程）。此前客户端只有 state/ping/migrate 三个 Host 方法，账本只能看不能改。
+- 契约核对（未新增路由、未改字段）：`host/http-app.js` 的 `/update` 接受 POST JSON `{memoryId, content, expectedBaseChangeId?}`，空内容/缺 id → 400；`/retract` 接受 `{memoryId, expectedBaseChangeId?, reason?}`；错误码来自 `ledger-service.toApiError`（stale→409、missing→404、busy/ledger-dirty→503）。
+- 改动：`createHostClient` 增加 `update`/`retract`（可选字段缺省时**不发送**，不发 null）；`ledgerView` 透传 `last_change_id` 与 `version`（缺失保持 null，不伪造）；账本行新增编辑表单与两步确认撤回；失败按 stale/busy/missing 分别提示，成功后 `probeHost()` 重读 `/state`，本地不写任何存储。
+- 测试：`client-panels` +2（17 项，覆盖路径/方法/Content-Type/请求体、可选字段缺省、409 stale 与 403 forbidden 映射、changeId/version 透传）；完整套件 **245/245 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主点击路径与浏览器视觉；账本并发写入的跨进程锁仍未验证；未对生产数据做任何写入。
