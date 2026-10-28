@@ -434,3 +434,64 @@ test('the host line explains all three connection states', async () => {
   assert.match(plugin.hostLine({ status: 'offline', reason: 'not-mounted' }, t), /本地模式 not-mounted/);
   assert.match(plugin.hostLine({ status: 'offline', reason: '' }, t), /本地模式 unknown/);
 });
+
+test('migrate sends the local store to the relative route and returns the summary', async () => {
+  const plugin = await loadPlugin();
+  let seen;
+  const client = plugin.createHostClient(async (url, init) => {
+    seen = { url, init };
+    return response({ json: { ok: true, applied: 2, replayed: 0, failed: 0, skipped: [] } });
+  });
+  const result = await client.migrate({ memories: [{ id: 'memory-1' }], candidates: [{ id: 'candidate-1' }] });
+  assert.equal(seen.url, 'api/dsh-memory/migrate');
+  assert.equal(seen.init.method, 'POST');
+  assert.equal(seen.init.headers['content-type'], 'application/json');
+  assert.deepEqual(JSON.parse(seen.init.body), {
+    memories: [{ id: 'memory-1' }],
+    candidates: [{ id: 'candidate-1' }],
+  });
+  assert.equal(result.applied, 2);
+});
+
+test('migrate refuses a missing store instead of sending an empty document', async () => {
+  const plugin = await loadPlugin();
+  let body;
+  const client = plugin.createHostClient(async (url, init) => {
+    body = JSON.parse(init.body);
+    return response({ json: { ok: true, applied: 0, replayed: 0, failed: 0, skipped: [] } });
+  });
+  await client.migrate({});
+  assert.deepEqual(body, { memories: [], candidates: [] });
+});
+
+test('the migration summary counts every outcome and names the skip reasons', async () => {
+  const plugin = await loadPlugin();
+  const messages = {
+    summary: '新增 {applied} 重复 {replayed} 失败 {failed} 跳过 {skipped}（{detail}）',
+    none: '无',
+  };
+  const t = (key) => (key === 'migrateSummary' ? messages.summary : messages.none);
+
+  const line = plugin.migrationSummary({
+    applied: 3,
+    replayed: 1,
+    failed: 0,
+    skipped: [
+      { id: 'a', reason: 'no-evidence' },
+      { id: 'b', reason: 'no-evidence' },
+      { id: 'c', reason: 'duplicate' },
+    ],
+  }, t);
+  assert.match(line, /新增 3/);
+  assert.match(line, /重复 1/);
+  assert.match(line, /跳过 3/);
+  assert.match(line, /duplicate 1/);
+  assert.match(line, /no-evidence 2/);
+
+  const clean = plugin.migrationSummary({ applied: 1, replayed: 0, failed: 0, skipped: [] }, t);
+  assert.match(clean, /新增 1/);
+  assert.match(clean, /无/);
+
+  const broken = plugin.migrationSummary(undefined, t);
+  assert.match(broken, /新增 0/);
+});

@@ -33,6 +33,11 @@ window.__ModuleLoader__.load({
       pingTimeout: '连接 Host 超时，Host 可能无响应。',
       hostProbing: '记忆库：连接中…', hostConnected: '记忆库：已连接 · {count} 条 · 提交 {head}',
       hostOffline: '记忆库：未连接（本地模式）· {reason}',
+      migrateButton: '导入到记忆库（{count} 条）',
+      migrateSending: '正在导入记忆库…',
+      migrateSummary: '导入完成：新增 {applied} 条，重复 {replayed} 条，失败 {failed} 条，跳过 {skipped} 条（{detail}）',
+      migrateNoSkips: '无',
+      migrateFailed: '导入失败：{reason}',
     };
     const en = {
       panel: 'Memory', title: 'Working memory', intro: "Today's interactions with your AI, with original text and sources.",
@@ -61,6 +66,11 @@ window.__ModuleLoader__.load({
       pingTimeout: 'The Host did not answer in time.',
       hostProbing: 'Memory store: connecting…', hostConnected: 'Memory store: connected · {count} entries · commit {head}',
       hostOffline: 'Memory store: not connected (local mode) · {reason}',
+      migrateButton: 'Import into the memory store ({count})',
+      migrateSending: 'Importing into the memory store…',
+      migrateSummary: 'Import finished: {applied} added, {replayed} already present, {failed} failed, {skipped} skipped ({detail})',
+      migrateNoSkips: 'none',
+      migrateFailed: 'Import failed: {reason}',
     };
 
     const CANDIDATES_KEY = 'dsh-memory.candidates.v1';
@@ -801,6 +811,15 @@ window.__ModuleLoader__.load({
           if (timer !== null) clearTimeout(timer);
         }
       }
+      /** POST with JSON. Relative URL, so a sub-path deployment still works. */
+      async function post(path, body) {
+        const response = await fetchImpl(`${root}${path}`, {
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        return readResponse(response);
+      }
       return {
         async state() {
           const data = await get('/state');
@@ -812,6 +831,13 @@ window.__ModuleLoader__.load({
         async ping() {
           return get('/ping');
         },
+        /** Move the local store into the ledger. The Host decides what is provable. */
+        async migrate(legacy) {
+          return post('/migrate', {
+            memories: Array.isArray(legacy.memories) ? legacy.memories : [],
+            candidates: Array.isArray(legacy.candidates) ? legacy.candidates : [],
+          });
+        },
       };
     }
 
@@ -822,6 +848,29 @@ window.__ModuleLoader__.load({
         return t('hostConnected').replace('{count}', String(host.count)).replace('{head}', head);
       }
       return t('hostOffline').replace('{reason}', host.reason || 'unknown');
+    }
+
+    /** One sentence about a migration run: what landed, what did not, and why. */
+    function migrationSummary(result, t) {
+      const applied = Number(result && result.applied) || 0;
+      const replayed = Number(result && result.replayed) || 0;
+      const failed = Number(result && result.failed) || 0;
+      const skipped = Array.isArray(result && result.skipped) ? result.skipped : [];
+      const reasons = {};
+      for (const entry of skipped) {
+        const reason = entry && typeof entry.reason === 'string' ? entry.reason : 'unknown';
+        reasons[reason] = (reasons[reason] || 0) + 1;
+      }
+      const detail = Object.keys(reasons)
+        .sort()
+        .map((reason) => `${reason} ${reasons[reason]}`)
+        .join('，');
+      return t('migrateSummary')
+        .replace('{applied}', String(applied))
+        .replace('{replayed}', String(replayed))
+        .replace('{failed}', String(failed))
+        .replace('{skipped}', String(skipped.length))
+        .replace('{detail}', detail === '' ? t('migrateNoSkips') : detail);
     }
 
     function MemoryPage({ sessions, t }) {
@@ -873,6 +922,17 @@ window.__ModuleLoader__.load({
             setPing(error && error.name === 'AbortError' ? t('pingTimeout') : failed('network'));
           })
           .then(() => clearTimeout(timer), () => clearTimeout(timer));
+      };
+      const migrateToHost = () => {
+        if (host.status !== 'ok' || typeof fetch !== 'function') return;
+        setNotice(t('migrateSending'));
+        const client = createHostClient(fetch);
+        client.migrate({ memories: loadStored(FORMAL_KEY), candidates: loadStored(CANDIDATES_KEY) }).then((result) => {
+          setNotice(migrationSummary(result, t));
+          probeHost();
+        }, (error) => {
+          setNotice(t('migrateFailed').replace('{reason}', (error && error.reason) || 'network'));
+        });
       };
       const fileRef = useRef(null);
       const clearDraft = (id) => {
@@ -995,6 +1055,9 @@ window.__ModuleLoader__.load({
         h('main', { className: 'dm-content' },
           notice ? h('p', { className: 'dm-muted', role: 'status' }, notice) : null,
           h('p', { className: 'dm-muted', role: 'status' }, hostLine(host, t)),
+          host.status === 'ok' && memories.length > 0
+            ? h('button', { type: 'button', className: 'dm-refresh', onClick: migrateToHost }, t('migrateButton').replace('{count}', String(memories.length)))
+            : null,
           ping ? h('p', { className: 'dm-muted', role: 'status' }, ping) : null,
           state.status === 'error'
             ? h('div', { className: 'dm-notice dm-error', role: 'alert' },
@@ -1150,6 +1213,7 @@ window.__ModuleLoader__.load({
       reviewView,
       createHostClient,
       hostLine,
+      migrationSummary,
       mergeDraft,
       editMemory,
       loadFullHistory,
