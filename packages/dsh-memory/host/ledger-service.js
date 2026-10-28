@@ -69,6 +69,67 @@ export function createLedgerService(options = {}) {
     return out;
   }
 
+  /**
+   * Recent ledger commits across every memory, newest first. Read-only: this
+   * reads the Git history the writer already produced, it never writes.
+   */
+  async function recentChanges(limit = 20) {
+    const ready = await open();
+    const head = await ready.readHead();
+    let raw;
+    try {
+      raw = await ready.git.run(['log', '--format=%H%x1f%cI', '--name-only', '--', 'changes/']);
+    } catch {
+      return { head, changes: [] };
+    }
+    // One commit prints a "<hash>\x1f<time>" header line, a blank line, then the
+    // paths it touched; the next header follows immediately.
+    const lines = String(raw ?? '').split('\n');
+    const isHeader = (line) => /^[0-9a-f]{40}\x1f/u.test(line);
+    const changes = [];
+    for (let index = 0; index < lines.length && changes.length < limit; index += 1) {
+      if (!isHeader(lines[index])) continue;
+      const [hash, time] = lines[index].split('\x1f');
+      let file;
+      for (let probe = index + 1; probe < lines.length; probe += 1) {
+        if (isHeader(lines[probe])) break;
+        const candidate = lines[probe].trim();
+        if (candidate.endsWith('.json')) { file = candidate; break; }
+      }
+      if (file === undefined) continue;
+      let change;
+      try {
+        change = JSON.parse(await ready.git.show(hash, file));
+      } catch {
+        continue;
+      }
+      if (change === null || typeof change !== 'object') continue;
+      const memoryId = typeof change.result_memory_id === 'string' ? change.result_memory_id
+        : (typeof change.target_memory_id === 'string' ? change.target_memory_id : null);
+      let content = typeof change.content === 'string' ? change.content : null;
+      if (content === null && memoryId !== null) {
+        // The change file may omit the text; the record at that commit is the truth.
+        try {
+          const record = JSON.parse(await ready.git.showOrUndefined(hash, `records/${memoryId}.json`));
+          if (record !== null && typeof record === 'object' && typeof record.content === 'string') content = record.content;
+        } catch {
+          content = null;
+        }
+      }
+      changes.push({
+        commit: hash,
+        committed_at: typeof time === 'string' && time !== '' ? time : null,
+        change_id: typeof change.change_id === 'string' ? change.change_id : null,
+        change_type: typeof change.change_type === 'string' ? change.change_type : null,
+        actor: typeof change.actor === 'string' ? change.actor : null,
+        reason: typeof change.reason === 'string' ? change.reason : '',
+        memory_id: memoryId,
+        content,
+      });
+    }
+    return { head, changes };
+  }
+
   /** Version timeline of one memory, oldest first. Read-only: no write path. */
   async function history(memoryId) {
     const ready = await open();
@@ -149,5 +210,5 @@ export function createLedgerService(options = {}) {
     });
   }
 
-  return { open, state, history, listMemories, add, update, retract, apply, errorFor: toApiError };
+  return { open, state, history, recentChanges, listMemories, add, update, retract, apply, errorFor: toApiError };
 }

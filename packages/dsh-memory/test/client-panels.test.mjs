@@ -437,3 +437,40 @@ test('the history timeline keeps versions ordered and diffs them honestly', asyn
   assert.equal(calls[0].url, 'api/dsh-memory/history?memoryId=M%201');
   assert.equal(calls[0].init.method, undefined);
 });
+
+test('the Git trail keeps commit facts and tolerates missing ones', async () => {
+  const { plugin } = await load();
+  const view = plugin.changeView({
+    head: 'abcdef0123456789',
+    changes: [
+      { commit: 'abcdef0123', committed_at: '2026-10-28T10:00:00Z', change_id: 'c-2', change_type: 'UPDATE', actor: 'user', reason: '纠正', memory_id: 'M-1', content: '新内容' },
+      { commit: '1234567890', committed_at: '2026-10-28T09:00:00Z', change_id: 'c-1', change_type: 'ADD', reason: '', memory_id: 'M-1', content: '旧内容' },
+    ],
+  });
+  assert.equal(view.head, 'abcdef0123456789');
+  assert.deepEqual(view.rows.map((row) => row.changeType), ['UPDATE', 'ADD']);
+  assert.equal(view.rows[0].reason, '纠正');
+  assert.equal(view.rows[1].reason, '');
+  assert.equal(view.rows[0].memoryId, 'M-1');
+
+  const bare = plugin.changeView({ changes: [{}] }).rows[0];
+  assert.equal(bare.commit, null);
+  assert.equal(bare.changeType, null);
+  assert.equal(bare.committedAt, null);
+  assert.equal(bare.content, null);
+  assert.equal(plugin.changeView(null).head, null);
+  assert.deepEqual(plugin.changeView(null).rows, []);
+  assert.deepEqual(plugin.changeView(undefined).rows, []);
+
+  const calls = [];
+  const client = plugin.createHostClient(async (url) => {
+    calls.push(url);
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, head: null, changes: [] }) };
+  });
+  await client.changes();
+  assert.equal(calls[0], 'api/dsh-memory/changes');
+  await client.changes({ limit: 5 });
+  assert.equal(calls[1], 'api/dsh-memory/changes?limit=5');
+  await client.changes({ limit: 0 });
+  assert.equal(calls[2], 'api/dsh-memory/changes', 'an unusable limit is not sent');
+});

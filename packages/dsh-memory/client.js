@@ -53,6 +53,8 @@ window.__ModuleLoader__.load({
       hostBusy: '账本正在写入，请稍后重试。', missingMemory: '这条记忆在账本中已不存在。',
       hostCandidates: 'Host 候选队列（{count}）',
       history: '历史', historyLoading: '正在读取版本历史…', historyError: '无法读取版本历史。',
+      recentChanges: '最近变更 · Git 留痕（{count} 条）', recentChangesEmpty: '账本还没有提交记录。',
+      recentChangesError: '无法读取账本变更记录。', ledgerHead: '账本 HEAD：{head}',
       historyEmpty: '没有可显示的版本。', historyVersion: '版本 {version}',
       hostCandidateAccepted: '已接受候选，记忆已写入账本。', hostCandidateRejected: '已拒绝该候选。', hostCandidateFailed: '候选操作未完成：{reason}', hostCandidatesHint: '来自运行时数据库：接受经 Host Writer 写入 Git 账本，拒绝只改变运行时候选状态。',
       hostCandidatesEmpty: 'Host 队列里还没有候选。', hostCandidatesError: '无法读取 Host 候选队列（Host 离线或运行时不可用）。',
@@ -114,6 +116,8 @@ window.__ModuleLoader__.load({
       hostBusy: 'The ledger is writing; retry in a moment.', missingMemory: 'This memory no longer exists in the ledger.',
       hostCandidates: 'Host candidate queue ({count})',
       history: 'History', historyLoading: 'Reading version history…', historyError: 'Could not read the version history.',
+      recentChanges: 'Recent changes · Git trail ({count})', recentChangesEmpty: 'The ledger has no commits yet.',
+      recentChangesError: 'Could not read the ledger change trail.', ledgerHead: 'Ledger HEAD: {head}',
       historyEmpty: 'No versions to show.', historyVersion: 'Version {version}',
       hostCandidateAccepted: 'Candidate accepted; the memory is now in the ledger.', hostCandidateRejected: 'Candidate rejected.', hostCandidateFailed: 'Candidate action failed: {reason}', hostCandidatesHint: 'From the runtime database: accept writes the Git ledger via the Host Writer, reject only changes the runtime status.',
       hostCandidatesEmpty: 'The Host queue has no candidates yet.', hostCandidatesError: 'Could not read the Host candidate queue (Host offline or runtime unavailable).',
@@ -999,6 +1003,11 @@ window.__ModuleLoader__.load({
         async history({ memoryId }) {
           return get(`/history?memoryId=${encodeURIComponent(String(memoryId ?? ''))}`);
         },
+        /** Recent ledger commits across memories. Read-only, like /state. */
+        async changes({ limit } = {}) {
+          const suffix = Number.isInteger(limit) && limit > 0 ? `?limit=${limit}` : '';
+          return get(`/changes${suffix}`);
+        },
       };
     }
 
@@ -1040,6 +1049,27 @@ window.__ModuleLoader__.load({
       while (i < a.length) { out.push({ kind: 'del', text: a[i] }); i += 1; }
       while (j < b.length) { out.push({ kind: 'add', text: b[j] }); j += 1; }
       return out;
+    }
+
+    /** Recent-change rows for the Git trail; missing fields stay null. */
+    function changeView(data) {
+      const list = Array.isArray(data && data.changes) ? data.changes : [];
+      return {
+        head: data && typeof data.head === 'string' ? data.head : null,
+        rows: list.map((entry) => {
+          const source = entry && typeof entry === 'object' ? entry : {};
+          return {
+            commit: typeof source.commit === 'string' ? source.commit : null,
+            committedAt: typeof source.committed_at === 'string' ? source.committed_at : null,
+            changeId: typeof source.change_id === 'string' ? source.change_id : null,
+            changeType: typeof source.change_type === 'string' ? source.change_type : null,
+            actor: typeof source.actor === 'string' ? source.actor : null,
+            reason: typeof source.reason === 'string' ? source.reason : '',
+            memoryId: typeof source.memory_id === 'string' ? source.memory_id : null,
+            content: typeof source.content === 'string' ? source.content : null,
+          };
+        }),
+      };
     }
 
     /** Version timeline rows; missing fields stay null instead of being invented. */
@@ -1319,12 +1349,24 @@ window.__ModuleLoader__.load({
       const loadHostQueue = () => {
         if (typeof fetch !== 'function') {
           setHostQueue({ status: 'idle', rows: [], error: null });
+          setChanges({ status: 'idle', rows: [], head: null });
           return;
         }
         createHostClient(fetch).candidates().then((queue) => {
           const view = hostCandidateView(queue);
           setHostQueue({ status: 'ready', rows: view.rows, error: null });
         }, () => setHostQueue({ status: 'error', rows: [], error: 'network' }));
+      };
+      const [changes, setChanges] = useState({ status: 'idle', rows: [], head: null });
+      const loadChanges = () => {
+        if (typeof fetch !== 'function') {
+          setChanges({ status: 'idle', rows: [], head: null });
+          return;
+        }
+        createHostClient(fetch).changes({ limit: 20 }).then((data) => {
+          const view = changeView(data);
+          setChanges({ status: 'ready', rows: view.rows, head: view.head });
+        }, () => setChanges({ status: 'error', rows: [], head: null }));
       };
       const [query, setQuery] = useState('');
       const [typeFilter, setTypeFilter] = useState('');
@@ -1367,6 +1409,7 @@ window.__ModuleLoader__.load({
           setHost({ status: 'ok', count: data.memories.length, head: data.head, reason: '' });
           setLedger(data.memories);
           loadHostQueue();
+          loadChanges();
         }, (error) => {
           setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
           setLedger([]);
@@ -1733,6 +1776,22 @@ window.__ModuleLoader__.load({
                 ? h('p', { className: 'dm-muted' }, t('hostCandidatesEmpty'))
                 : h('ul', { className: 'dm-host-queue-list' }, hostQueue.rows.map((row) => hostQueueItem(row))))
             : null,
+          host.status === 'ok' && changes.status === 'error'
+            ? h('p', { className: 'dm-muted', role: 'alert' }, t('recentChangesError'))
+            : null,
+          host.status === 'ok' && changes.status === 'ready'
+            ? h('section', { className: 'dm-changes' },
+              h('p', { className: 'dm-muted' }, t('recentChanges').replace('{count}', String(changes.rows.length))),
+              changes.head === null ? null : h('p', { className: 'dm-muted dm-changes-head' }, t('ledgerHead').replace('{head}', changes.head.slice(0, 12))),
+              changes.rows.length === 0
+                ? h('p', { className: 'dm-muted' }, t('recentChangesEmpty'))
+                : h('ul', { className: 'dm-changes-list' }, changes.rows.map((row, index) => h('li', { key: (row.changeId || 'c') + String(index), className: 'dm-changes-row' },
+                  h('span', { className: 'dm-badge dm-badge-' + (row.changeType === 'ADD' ? 'ok' : row.changeType === 'RETRACT' ? 'muted' : 'pending') }, row.changeType === null ? t('notProvided') : row.changeType),
+                  h('span', { className: 'dm-muted' }, row.memoryId === null ? t('notProvided') : row.memoryId),
+                  row.reason === '' ? null : h('span', { className: 'dm-muted' }, row.reason),
+                  h('span', { className: 'dm-muted dm-changes-time' }, row.committedAt === null ? t('notProvided') : row.committedAt),
+                  h('span', { className: 'dm-muted dm-changes-commit' }, row.commit === null ? '' : row.commit.slice(0, 7))))))
+            : null,
           host.status === 'ok' && shownLedger.length > 0
             ? h('section', { className: 'dm-ledger' },
               h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(shownLedger.length))),
@@ -1978,6 +2037,11 @@ window.__ModuleLoader__.load({
       .dm-host-queue-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
       .dm-host-queue-row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--dm-border)}
       .dm-host-queue-actions{display:flex;gap:10px;align-items:center;margin-left:auto}
+      .dm-changes{margin:20px 0 0;padding:14px 16px;border:1px solid var(--dm-border);border-radius:12px;background:var(--dm-bg-soft)}
+      .dm-changes-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+      .dm-changes-row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--dm-border)}
+      .dm-changes-time{margin-left:auto}
+      .dm-changes-commit{font-family:var(--dm-mono)}
       .dm-history{flex:1 1 100%;margin-top:10px;padding:10px 12px;border:1px solid var(--dm-border);border-radius:10px;background:var(--dm-bg-soft)}
       .dm-history-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
       .dm-history-item{padding-bottom:8px;border-bottom:1px solid var(--dm-border)}
@@ -2027,6 +2091,7 @@ window.__ModuleLoader__.load({
       reviewView,
       createHostClient,
       hostLine,
+      changeView,
       diffLines,
       versionView,
       hostCandidateView,

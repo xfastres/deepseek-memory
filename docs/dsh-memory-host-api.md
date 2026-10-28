@@ -89,6 +89,7 @@
 | `GET /state` | 一次性取全部界面状态 | `revision`、`memories`、`candidates`、`settings`、`ledger`（提交数、最后提交时间） |
 | `GET /export` | 导出完整数据 | 与现有 `dsh-memory/v1` 格式兼容，附加 `ledger_commit` |
 | `GET /history?memoryId=<id>` | 单条正式记忆的版本时间线（只读） | `memoryId`、`versions[]`（`version`、`commit`、`committed_at`、`change_id`、`change_type`、`reason`、`actor`、`content`、`status`），按提交时间从旧到新；缺 `memoryId` → 400 `missing-id`，无此记忆 → 404 `missing` |
+| `GET /changes?limit=<n>` | 账本最近的提交（跨记忆 Git 留痕，只读） | `head`、`count`、`changes[]`（`commit`、`committed_at`、`change_id`、`change_type`、`actor`、`reason`、`memory_id`、`content`），按提交从新到旧；`limit` 非数字 → 400 `bad-limit`，范围 1–100，默认 20 |
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 

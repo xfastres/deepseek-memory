@@ -952,3 +952,15 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 改动：`ledger-service` 增加 `history(memoryId)`（version/commit/committed_at/change_id/change_type/reason/actor/content/status，缺失保持 null）；`http-app` 增加路由并登记到 `APP_ROUTE_NAMES`；客户端增加 `history()` 只读方法、LCS 行差异 `diffLines`（>400 行退化为前缀/后缀粗粒度，仍然如实标注增删）、`versionView` 归一化；账本行新增“历史”开关，展开后按版本列出提交时间、变更类型、原因与**相邻版本差异**，首版整体显示为新增；含加载/错误/空态。
 - 测试：`http-app` +1（12 项：ADD→UPDATE 两版顺序、内容、commit 形状、400/404/403/405）；`client-panels` +1（21 项：版本归一化、缺失字段为 null、差异的增/删/改/插行、空内容为零行、history 请求路径与 URL 编码）；`host` 路由清单测试改为从 `APP_ROUTE_NAMES` 推导数量，避免每加一条只读路由就改一次硬编码；完整套件 **250/250 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上点击“历史”后的渲染与真实 Git 提交时间显示；浏览器视觉；差异在超长正文下的可读性。
+
+### 迭代 12（2026-10-28，阶段 3 收尾：Git 留痕可见）
+- 依据：roadmap §8.1（Git 保存正式内容、版本与提交说明；UI 只通过 Host API 读取）、§10.2（变更前后可追溯）；此前 `/state` 只给出 `head`，界面没有任何“最近改了什么”的视图，Git 提交对用户不可见。
+- 契约：新增只读 `GET /changes?limit=<n>`（`isTrustedRead`；范围 1–100，默认 20；非数字 400 `bad-limit`）。返回 `head`、`count`、`changes[]`（commit/committed_at/change_id/change_type/actor/reason/memory_id/content），按提交从新到旧。未改既有路由。
+- 实现中的真实问题（已修正，留作记录）：
+  1. 第一版用 `git ls-tree` 找变更文件：ls-tree 返回的是该提交的整棵树，不是本次改动的文件，导致两条提交都归因到最早的 ADD 变更（测试直接暴露 `['ADD','ADD']`）。
+  2. 改为 `git log --format=%H%x1f%cI --name-only`，并按真实输出解析（提交之间只有单个换行，文件名行紧跟头部行之后）。
+  3. 空账本 `head` 并非 null（打开账本本身会产生初始提交），测试改为只断言“没有记忆变更”，不再假想 head 为空。
+  4. 变更文件可能不带正文，此时读取该提交下 `records/<id>.json` 的内容，仍取不到就保持 null，不编造。
+- 改动：`ledger-service.recentChanges(limit)`；`http-app` 路由与 `APP_ROUTE_NAMES` 登记；客户端 `changes()` 只读方法、`changeView` 归一化、Host 在线时的“最近变更 · Git 留痕”区块（类型徽标、记忆 id、原因、提交时间、短提交号、HEAD 前 12 位），含空态与错误态。
+- 测试：`http-app` +1（13 项：空账本无变更、ADD→UPDATE 顺序与新到旧、memory_id/content、limit 截断、bad-limit、403、405）；`client-panels` +1（22 项：归一化、缺失字段 null、limit 不上送 0、请求路径）；`host` 路由清单补 `/changes`（数量已改为从 `APP_ROUTE_NAMES` 推导）；完整套件 **252/252 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主上的渲染与真实提交时间；浏览器视觉；跨进程并发写时 Git 日志的稳定性。

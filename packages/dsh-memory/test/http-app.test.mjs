@@ -416,3 +416,42 @@ test('history returns the version timeline oldest first and refuses the rest', a
     assert.equal(wrongMethod.status, 405);
   });
 });
+
+test('changes lists recent ledger commits newest first and validates its limit', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+    const empty = await call(app, '/api/dsh-memory/changes');
+    assert.equal(empty.status, 200);
+    assert.equal(empty.json.ok, true);
+    assert.deepEqual(empty.json.changes, []);
+    assert.ok(empty.json.head === null || typeof empty.json.head === 'string');
+
+    const added = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { content: '账本留痕第一条', type: 'fact', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    assert.equal(added.status, 200);
+    const updated = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId: added.json.memory.id, content: '账本留痕第二条', expectedBaseChangeId: added.json.change_id },
+    });
+    assert.equal(updated.status, 200);
+
+    const recent = await call(app, '/api/dsh-memory/changes?limit=10');
+    assert.equal(recent.status, 200);
+    assert.equal(recent.json.count, 2);
+    assert.deepEqual(recent.json.changes.map((entry) => entry.change_type), ['UPDATE', 'ADD']);
+    assert.equal(recent.json.changes[0].memory_id, added.json.memory.id);
+    assert.equal(recent.json.changes[0].content, '账本留痕第二条');
+    assert.match(recent.json.changes[0].commit, /^[0-9a-f]{7,40}$/u);
+    assert.equal(typeof recent.json.head, 'string');
+
+    const limited = await call(app, '/api/dsh-memory/changes?limit=1');
+    assert.equal(limited.json.changes.length, 1);
+    assert.equal(limited.json.changes[0].change_type, 'UPDATE');
+
+    assert.equal((await call(app, '/api/dsh-memory/changes?limit=abc')).status, 400);
+    assert.equal((await call(app, '/api/dsh-memory/changes', { headers: { host: 'evil.example.com' } })).status, 403);
+    assert.equal((await call(app, '/api/dsh-memory/changes', { method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: {} })).status, 405);
+  });
+});
