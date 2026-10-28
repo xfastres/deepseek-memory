@@ -59,6 +59,18 @@ export function toCandidateStatus(status) {
   return LEGACY_CANDIDATE_STATUSES[status] ?? status;
 }
 
+/**
+ * §11 AI proposals: what the model may submit, and what the user must still do.
+ * A proposal is not a candidate: it has no evidence rule of its own, it is
+ * never injected, and accepting it is a deliberate user action.
+ */
+export const PROPOSAL_ACTIONS = Object.freeze(['add', 'update', 'merge', 'retract']);
+export const PROPOSAL_STATUSES = Object.freeze(['open', 'accepted', 'rejected', 'failed']);
+
+export function isProposalAction(value) {
+  return typeof value === 'string' && PROPOSAL_ACTIONS.includes(value);
+}
+
 export function isOpenCandidateStatus(status) {
   return OPEN_CANDIDATE_STATUSES.includes(toCandidateStatus(status));
 }
@@ -80,7 +92,7 @@ export class RuntimeStoreError extends Error {
 }
 
 function emptyDocument() {
-  return { version: RUNTIME_VERSION, candidates: [], injections: [], objections: [] };
+  return { version: RUNTIME_VERSION, candidates: [], injections: [], objections: [], proposals: [] };
 }
 
 function candidateId(now) {
@@ -91,6 +103,11 @@ function candidateId(now) {
 function objectionId(now) {
   const stamp = now.toISOString().slice(0, 10).replace(/-/gu, '');
   return `O-${stamp}-${randomUUID().slice(0, 8)}`;
+}
+
+function proposalId(now) {
+  const stamp = now.toISOString().slice(0, 10).replace(/-/gu, '');
+  return `P-${stamp}-${randomUUID().slice(0, 8)}`;
 }
 
 function normalise(text) {
@@ -139,6 +156,7 @@ export function createRuntimeStore(options = {}) {
         : [],
       injections: Array.isArray(parsed.injections) ? parsed.injections : [],
       objections: Array.isArray(parsed.objections) ? parsed.objections : [],
+      proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
     };
   }
 
@@ -307,6 +325,70 @@ export function createRuntimeStore(options = {}) {
       });
     },
 
+    /**
+     * Record an AI proposal (§11 memory_propose).
+     *
+     * Evidence is required: a proposal without the user's own words behind it
+     * is refused here, so the model cannot manufacture a change out of nothing.
+     */
+    async addProposal(input = {}) {
+      if (!isProposalAction(input.action)) {
+        throw new RuntimeStoreError(`unknown proposal action: ${String(input.action)}`, 'invalid-action');
+      }
+      const action = input.action;
+      const content = typeof input.content === 'string' ? input.content.trim() : '';
+      if (action !== 'retract' && content === '') throw new RuntimeStoreError('proposal needs content', 'empty');
+      const targetMemoryId = typeof input.targetMemoryId === 'string' ? input.targetMemoryId.trim() : '';
+      if (action !== 'add' && targetMemoryId === '') {
+        throw new RuntimeStoreError('this proposal needs a target memory', 'empty-target');
+      }
+      const sourceRef = input.sourceRef && typeof input.sourceRef === 'object' ? input.sourceRef : null;
+      if (sourceRef === null) throw new RuntimeStoreError('proposal needs the user words behind it', 'no-evidence');
+      if (input.kind !== undefined && input.kind !== null && !isCorrectionKind(input.kind)) {
+        throw new RuntimeStoreError(`unknown correction kind: ${String(input.kind)}`, 'invalid-kind');
+      }
+      return mutate((document) => {
+        const twin = document.proposals.find((entry) => entry.status === 'open'
+          && entry.action === action
+          && entry.target_memory_id === (targetMemoryId === '' ? null : targetMemoryId)
+          && normalise(entry.content) === normalise(content));
+        if (twin) throw new RuntimeStoreError('an identical proposal is already open', 'duplicate');
+        const proposal = {
+          id: proposalId(now()),
+          action,
+          target_memory_id: targetMemoryId === '' ? null : targetMemoryId,
+          content: action === 'retract' ? '' : content,
+          type: typeof input.type === 'string' ? toLedgerType(input.type) ?? input.type : null,
+          kind: isCorrectionKind(input.kind) ? input.kind : null,
+          reason: typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : '',
+          origin: 'llm',
+          source_refs: [sourceRef],
+          status: 'open',
+          created_at: now().toISOString(),
+        };
+        document.proposals.push(proposal);
+        return proposal;
+      });
+    },
+
+    async listProposals() {
+      return (await read()).proposals;
+    },
+
+    async setProposalStatus(id, status, meta = {}) {
+      if (!PROPOSAL_STATUSES.includes(status)) {
+        throw new RuntimeStoreError(`unknown proposal status: ${status}`, 'invalid-status');
+      }
+      return mutate((document) => {
+        const proposal = document.proposals.find((entry) => entry.id === id);
+        if (!proposal) throw new RuntimeStoreError(`no proposal ${id}`, 'missing');
+        proposal.status = status;
+        proposal.reviewed_at = now().toISOString();
+        if (typeof meta.memoryId === 'string') proposal.memory_id = meta.memoryId;
+        return proposal;
+      });
+    },
+
     async recordInjection(record = {}) {
       const memoryIds = Array.isArray(record.memoryIds) ? record.memoryIds.filter((id) => typeof id === 'string') : [];
       return mutate((document) => {
@@ -350,6 +432,7 @@ export function createRuntimeStore(options = {}) {
         pending,
         injections: document.injections.length,
         objections: objected,
+        proposals: document.proposals.filter((entry) => entry !== null && typeof entry === 'object' && entry.status === 'open').length,
       };
     },
   };

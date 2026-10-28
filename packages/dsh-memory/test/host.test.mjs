@@ -64,6 +64,7 @@ test('the Host half exposes the ping probe plus the memory routes', () => {
     '/api/dsh-memory/objections',
     '/api/dsh-memory/objections/clear',
     '/api/dsh-memory/settings',
+    '/api/dsh-memory/proposals',
     '/api/dsh-memory/injections',
   ]);
   assert.equal(new Set(paths).size, paths.length, 'route paths must be distinct');
@@ -161,8 +162,9 @@ test('apply registers every route and the tool through the documented service ac
   apply(ctx);
   assert.equal(registered.length, APP_ROUTE_NAMES.length + 1);
   assert.equal(registered[0].path, PING_PATH);
-  assert.equal(tooled.length, 1);
+  assert.equal(tooled.length, 2, 'the ping probe and the proposal tool');
   assert.equal(tooled[0].name, 'dsh_memory_ping');
+  assert.equal(tooled[1].name, 'memory_propose');
 });
 
 test('apply also works when services arrive as context properties', () => {

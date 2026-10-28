@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { createMemoryApp } from '../host/http-app.js';
+import { API_PREFIX, APP_ROUTE_NAMES } from '../index.js';
 
 const BROWSER = { 'sec-fetch-site': 'same-origin', origin: 'http://127.0.0.1:51840' };
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -774,5 +775,128 @@ test('the queue carries the §7.2 status and whether it still needs a decision',
     const closed = await call(app, '/api/dsh-memory/candidates');
     assert.equal(closed.json.candidates[0].status, 'accepted_by_user');
     assert.equal(closed.json.candidates[0].open, false);
+  });
+});
+
+const PROPOSAL_REF = { session_id: 's1', event_seq: 2 };
+
+async function addMemory(app, content) {
+  const added = await call(app, '/api/dsh-memory/add', {
+    method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+    body: { content, sourceRef: { session_id: 's1', event_seq: 2 } },
+  });
+  assert.equal(added.status, 200);
+  return added.json.memory;
+}
+
+test('a proposal is listed, and only the user can accept it', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const memory = await addMemory(app, '项目使用 pnpm');
+    const proposal = await app.runtime.addProposal({
+      action: 'update', targetMemoryId: memory.id, content: '项目使用 pnpm 9', kind: 'outdated', reason: '版本变了', sourceRef: PROPOSAL_REF,
+    });
+
+    const listed = await call(app, '/api/dsh-memory/proposals');
+    assert.equal(listed.status, 200);
+    assert.equal(listed.json.proposals.length, 1);
+    assert.equal(listed.json.proposals[0].status, 'open');
+    assert.deepEqual(listed.json.actions, ['add', 'update', 'merge', 'retract']);
+
+    const noBase = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { proposalId: proposal.id, action: 'accept' },
+    });
+    assert.equal(noBase.status, 400, 'the user must confirm against the version they saw');
+    assert.equal(noBase.json.error, 'missing-base');
+    assert.equal((await call(app, '/api/dsh-memory/state')).json.memories[0].content, '项目使用 pnpm', 'a refused accept writes nothing');
+
+    const accepted = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { proposalId: proposal.id, action: 'accept', expectedBaseChangeId: memory.last_change_id },
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.json.proposal.status, 'accepted');
+    assert.equal(accepted.json.proposal.memory_id, memory.id);
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories[0].content, '项目使用 pnpm 9');
+    assert.equal(state.json.memories[0].version, 2, 'the write went through the ledger, as a new version');
+
+    const again = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { proposalId: proposal.id, action: 'accept', expectedBaseChangeId: memory.last_change_id },
+    });
+    assert.equal(again.status, 409);
+    assert.equal(again.json.error, 'not-open');
+  });
+});
+
+test('a rejected proposal touches nothing, and retract proposals go through the writer', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const memory = await addMemory(app, '项目使用 pnpm');
+    const rejected = await app.runtime.addProposal({ action: 'add', content: '多出来的事实', type: 'fact', sourceRef: PROPOSAL_REF });
+    const rejectedCall = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { proposalId: rejected.id, action: 'reject' },
+    });
+    assert.equal(rejectedCall.status, 200);
+    assert.equal(rejectedCall.json.proposal.status, 'rejected');
+    assert.equal((await call(app, '/api/dsh-memory/state')).json.memories.length, 1);
+
+    const retract = await app.runtime.addProposal({ action: 'retract', targetMemoryId: memory.id, sourceRef: PROPOSAL_REF });
+    const retracted = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { proposalId: retract.id, action: 'accept', expectedBaseChangeId: memory.last_change_id },
+    });
+    assert.equal(retracted.status, 200);
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories[0].status, 'retracted');
+
+    const add = await app.runtime.addProposal({ action: 'add', content: '用户偏好中文回答', type: 'preference', sourceRef: PROPOSAL_REF });
+    const added = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { proposalId: add.id, action: 'accept' },
+    });
+    assert.equal(added.status, 200, 'an add proposal needs no base change id');
+    assert.equal(added.json.memory.content, '用户偏好中文回答');
+
+    const crossSite = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS, 'sec-fetch-site': 'cross-site' },
+      body: { proposalId: add.id, action: 'accept' },
+    });
+    assert.equal(crossSite.status, 403);
+    const notJson = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, 'content-type': 'text/plain' }, body: 'x',
+    });
+    assert.equal(notJson.status, 415);
+    const missing = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: { action: 'accept' },
+    });
+    assert.equal(missing.status, 400);
+    const unknown = await call(app, '/api/dsh-memory/proposals', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: { proposalId: 'P-nope', action: 'accept' },
+    });
+    assert.equal(unknown.status, 404);
+  });
+});
+
+test('every advertised route name has a handler, so a name can never be a promise', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+    const missing = APP_ROUTE_NAMES.filter((name) => typeof app.routes[`${API_PREFIX}/${name}`] !== 'function');
+    assert.deepEqual(missing, [], 'a name without a handler would be a silent 404');
   });
 });

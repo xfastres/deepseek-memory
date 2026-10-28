@@ -15,7 +15,7 @@ import { evaluateCandidatePolicies } from './policy.js';
 import { toLedgerType } from './memory-types.js';
 import { CORRECTION_KINDS } from './corrections.js';
 import { AUTO_ACCEPT_TYPE_CHOICES, loadSettings, writeSettings } from './settings.js';
-import { isOpenCandidateStatus } from './runtime-store.js';
+import { isOpenCandidateStatus, PROPOSAL_ACTIONS } from './runtime-store.js';
 
 import { createLedgerService, toApiError } from './ledger-service.js';
 import { applyMigration, planMemoryMigration } from './migration.js';
@@ -504,6 +504,69 @@ export function createMemoryApp(options = {}) {
         writeJson(res, 200, { ok: true, ...written, choices: { autoAcceptTypes: AUTO_ACCEPT_TYPE_CHOICES } });
       } catch (error) {
         fail(res, error);
+      }
+    },
+
+    /**
+     * AI proposals (§11): the model may submit, only the user may accept.
+     *
+     * Creating a proposal never touches the ledger. Accepting goes through the
+     * same single writer the review panel uses, against the version the user
+     * actually saw, so a concurrent edit cannot be silently overwritten.
+     */
+    [`${API_PREFIX}/proposals`]: async (req, res) => {
+      if (req.method === 'GET') {
+        if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+        writeJson(res, 200, { ok: true, proposals: await runtime.listProposals(), actions: PROPOSAL_ACTIONS });
+        return;
+      }
+      if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      try {
+        const body = await readJsonBody(req);
+        if (typeof body.proposalId !== 'string' || body.proposalId === '') {
+          writeJson(res, 400, { ok: false, error: 'missing-id' }); return;
+        }
+        const proposals = await runtime.listProposals();
+        const proposal = proposals.find((entry) => entry.id === body.proposalId);
+        if (!proposal) { writeJson(res, 404, { ok: false, error: 'missing' }); return; }
+        if (proposal.status !== 'open') { writeJson(res, 409, { ok: false, error: 'not-open', status: proposal.status }); return; }
+
+        if (body.action === 'reject') {
+          const reviewed = await runtime.setProposalStatus(proposal.id, 'rejected');
+          writeJson(res, 200, { ok: true, proposal: reviewed });
+          return;
+        }
+        if (body.action !== 'accept') { writeJson(res, 400, { ok: false, error: 'unknown-action' }); return; }
+
+        const expected = typeof body.expectedBaseChangeId === 'string' && body.expectedBaseChangeId !== ''
+          ? body.expectedBaseChangeId
+          : null;
+        let result;
+        if (proposal.action === 'add') {
+          result = await service.add({
+            content: proposal.content,
+            type: proposal.type ?? undefined,
+            sourceRefs: proposal.source_refs,
+            idempotencyKey: `proposal:${proposal.id}`,
+          });
+        } else {
+          if (expected === null) { writeJson(res, 400, { ok: false, error: 'missing-base' }); return; }
+          if (typeof proposal.target_memory_id !== 'string' || proposal.target_memory_id === '') {
+            writeJson(res, 422, { ok: false, error: 'missing-target' }); return;
+          }
+          result = proposal.action === 'retract'
+            ? await service.retract({ memoryId: proposal.target_memory_id, expectedBaseChangeId: expected })
+            : await service.update({ memoryId: proposal.target_memory_id, content: proposal.content, expectedBaseChangeId: expected });
+        }
+        const reviewed = await runtime.setProposalStatus(proposal.id, 'accepted', {
+          memoryId: result && result.memory && typeof result.memory.id === 'string' ? result.memory.id : undefined,
+        });
+        writeJson(res, 200, { ok: true, status: result && result.status, memory: result ? result.memory : null, proposal: reviewed });
+      } catch (error) {
+        // Stale or busy stays retryable, so the proposal stays open.
+        runtimeFail(res, error);
       }
     },
 

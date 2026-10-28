@@ -1049,3 +1049,12 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `client.js`：九种状态的中英标签；徽标语气按状态；接受/拒绝按钮只在 `open === true` 时出现（依赖 Host 的判定，客户端不复制状态规则）。
 - 测试：`runtime-store` +1（旧文件三值映射 + 未知值原样保留 + 读取不重写 + 下次写入使用新词汇）；`auto-memory` +1（策略→状态映射，默认安全落到 review_pending）；`http-app` +1（新候选 proposed、open 为真；接受后 accepted_by_user、open 为假）；`client-panels` +1（九种标签、未知返回 null、open 透传）；既有断言更新为真实新状态；完整套件 **313/313 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上旧 `runtime.json` 的迁移表现（生产数据未触碰，仅测试夹具覆盖）；浏览器上状态徽标与按钮显隐；自动接受路径在真实对话中写入 `auto_accepted` 的端到端。
+
+### 迭代 22（2026-10-28，阶段 4.6 的模型侧入口：`memory_propose`）
+- 依据：`§11 AI 工具权限`（`memory_propose` 允许提交提案并附证据、禁止直接改账本或批准自己的提案）、`§10.2`（让 LLM 提出修改，修改前后用 diff）、`D9`。现状证据：插件此前只注册 `dsh_memory_ping`，模型没有任何提案入口；`§11` 的 `memory_search` 与可选 `memory_object` 仍未实现（如实记录）。
+- 实现：
+  - `host/runtime-store.js`：新增 `proposals` 集合（旧 `runtime.json` 无此键可加载）；`PROPOSAL_ACTIONS`/`PROPOSAL_STATUSES`；`addProposal` 强制证据（无 `sourceRef` → `no-evidence`）、`update/merge/retract` 必须有目标（`empty-target`）、`retract` 可无正文、同目标同动作同正文的开放提案拒绝重复（`duplicate`）；`listProposals`、`setProposalStatus`；`summary.proposals` 只数开放项。
+  - `index.js`：新增 `createProposeTool`（参数 `action/targetMemoryId/content/type/kind/reason`，输出 `{ok, proposal}|{ok:false,error}`）；证据绑定**当轮**用户消息：`agent/pre-step` 记录 `{sessionId, turn}`，工具用 `app.evidence.resolve` 取真实事件；没有轮次上下文 / 解析不到证据 / Host 不可用一律返回错误而**不写入**；注册到 `ctx.tools`（与 ping 并列）。
+  - `host/http-app.js`：`GET/POST /proposals`；accept 走同一单一 Writer（add 幂等键 `proposal:<id>`；update/merge/retract 必须带 `expectedBaseChangeId`）；已被并发修改/忙时提案保持 `open` 可重试；`/proposals` 加入 `APP_ROUTE_NAMES`。
+- 测试：新增 `proposals.test.mjs` 6 项（存储与证据、缺证据/缺目标/坏动作/坏 kind 拒绝、去重与已解决后可再提、工具正常提案并记录证据、工具在无轮次/无证据/坏动作时拒绝且不写；未知提案状态拒绝）；`http-app` +3（提案列出、无 base 400、接受后写入且版本 +1、重复接受 409、拒绝零改动、retract 提案走 Writer、add 提案无需 base、403/415/400/404；新增「每个对外路由名都必须有处理器」防回归测试——本轮正是靠它发现 `/proposals` 未真正插入）；`host.test` 路由与工具注册更新（2 个工具）；完整套件 **322/322 通过**；`git diff --check` 退出码 0。
+- 未验证：真实宿主的工具调用（需新进程；模型是否按预期调用 `memory_propose`、`agent/pre-step` 的 payload 形状在真实会话中是否如测试夹具）；提案面板 UI（尚未实现，下一轮）；`memory_search` 与 `memory_object` 未实现；浏览器视觉与交互。

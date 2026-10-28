@@ -93,6 +93,10 @@
 
 `revision` 是单调递增整数：界面每次改完都带回，用于发现“别处也改过”。
 
+> AI 提案（§11 `memory_propose`）：
+> - `GET /proposals` → `{ ok, proposals: [{ id, action, target_memory_id, content, type, kind, reason, origin: 'llm', source_refs, status, created_at, reviewed_at?, memory_id? }], actions: ['add','update','merge','retract'] }`（只读）。
+> - `POST /proposals { proposalId, action: 'accept' | 'reject', expectedBaseChangeId? }` → `reject` 只改提案状态；`accept` 走**同一**单一 Writer：`add` 用 `service.add`（幂等键 `proposal:<id>`），`update`/`merge`/`retract` 必须提供 `expectedBaseChangeId`（缺失 → `400 missing-base`），目标记忆不存在或已被并发修改时由 Writer 返回 `404/409`，提案保持 `open` 以便重试。提案不是候选、不是记忆、永不进入注入；AI 不能批准自己的提案（D9）。
+
 > 候选状态（§7.2）：`proposed` → `validating` → `review_pending`；终态为 `auto_accepted`（策略自动写入）、`accepted_by_user`（用户接受/合并）、`rejected`、`conflict`、`no_change`、`failed`。`/candidates` 的每一行额外返回 `open`（仍需决定：`proposed`/`validating`/`review_pending`/`conflict`）。旧 `runtime.json` 里的 `pending`/`accepted`/`rejected` 在**读取时**映射为 `review_pending`/`accepted_by_user`/`rejected`，未知值原样保留；文件只在下一次写入时才改写。
 
 > 自动记忆设置（§10.1.6）：

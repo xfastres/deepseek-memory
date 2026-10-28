@@ -35,7 +35,7 @@ export const PING_PATH = `${API_PREFIX}/ping`;
 
 /** Routes served by the memory application, in addition to the ping probe. */
 export const APP_ROUTE_NAMES = Object.freeze([
-  'state', 'history', 'changes', 'export', 'add', 'update', 'retract', 'migrate', 'candidates', 'candidate', 'review', 'objections', 'objections/clear', 'settings', 'injections',
+  'state', 'history', 'changes', 'export', 'add', 'update', 'retract', 'migrate', 'candidates', 'candidate', 'review', 'objections', 'objections/clear', 'settings', 'proposals', 'injections',
 ]);
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -185,6 +185,101 @@ export function createPingTool(options = {}) {
   };
 }
 
+/**
+ * §11 `memory_propose`: the model may propose, never approve.
+ *
+ * Three rules, enforced here rather than trusted to the prompt:
+ *   1. The proposal is evidence-bound: it is refused unless the current turn
+ *      resolves to a real session event, so a change cannot be invented.
+ *   2. It writes nothing but a runtime proposal; the ledger is untouched.
+ *   3. Accepting is the user's act, on the Host route, against the version the
+ *      user actually saw.
+ */
+export function createProposeTool(options = {}) {
+  const getApp = typeof options.getApp === 'function' ? options.getApp : async () => null;
+  const currentTurn = typeof options.currentTurn === 'function' ? options.currentTurn : () => null;
+  return {
+    name: 'memory_propose',
+    description: 'Propose a change to a saved memory. The user must accept it; this tool never writes the memory ledger.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'update', 'merge', 'retract'] },
+        targetMemoryId: { type: 'string', description: 'Required unless action is add.' },
+        content: { type: 'string', description: 'The proposed text. Required unless action is retract.' },
+        type: { type: 'string', description: 'Memory type for an add proposal, e.g. fact, preference, constraint.' },
+        kind: { type: 'string', description: 'Why the user wants this, when it is a correction.' },
+        reason: { type: 'string', description: 'A short explanation for the user.' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          proposal: { type: 'object' },
+          error: { type: 'string' },
+        },
+        required: ['ok'],
+        additionalProperties: true,
+      },
+      render(_args, value) {
+        return [{ type: 'text', text: JSON.stringify(value) }];
+      },
+    },
+    async execute(args = {}) {
+      const turn = currentTurn();
+      if (turn === null || typeof turn.sessionId !== 'string' || turn.sessionId === '' || !Number.isInteger(turn.turn)) {
+        return { ok: false, error: 'no-turn-context' };
+      }
+      let app;
+      try {
+        app = await getApp();
+      } catch {
+        return { ok: false, error: 'host-unavailable' };
+      }
+      if (app === null || app === undefined || app.runtime === undefined || app.runtime === null) {
+        return { ok: false, error: 'host-unavailable' };
+      }
+      let ref = null;
+      try {
+        ref = app.evidence === null || app.evidence === undefined
+          ? null
+          : await app.evidence.resolve({ sessionId: turn.sessionId, turn: turn.turn });
+      } catch {
+        ref = null;
+      }
+      if (ref === null || ref === undefined) return { ok: false, error: 'no-evidence' };
+      try {
+        const proposal = await app.runtime.addProposal({
+          action: args.action,
+          targetMemoryId: args.targetMemoryId,
+          content: args.content,
+          type: args.type,
+          kind: args.kind,
+          reason: args.reason,
+          sourceRef: ref,
+        });
+        return {
+          ok: true,
+          proposal: {
+            id: proposal.id,
+            action: proposal.action,
+            target_memory_id: proposal.target_memory_id,
+            content: proposal.content,
+            status: proposal.status,
+            created_at: proposal.created_at,
+          },
+        };
+      } catch (error) {
+        return { ok: false, error: String(error && error.code ? error.code : 'failed') };
+      }
+    },
+  };
+}
+
 /** The plugin data directory. Overridable for tests and manual experiments. */
 export function resolveDataDir(env = process.env) {
   const override = env && typeof env.DSH_MEMORY_DATA_DIR === 'string' ? env.DSH_MEMORY_DATA_DIR.trim() : '';
@@ -317,6 +412,7 @@ export function apply(ctx) {
   });
   /** What the rule engine proposes for the current turn. Nothing is written. */
   let proposed = [];
+  let currentTurn = null;
   const status = () => ({
     ...injectionSnapshot(injection, contextState),
     context: contextState === undefined || contextState === null ? null : { ...contextState },
@@ -530,7 +626,10 @@ export function apply(ctx) {
 
   attempt(() => {
     const tools = service(ctx, 'tools');
-    if (tools && typeof tools.register === 'function') keep(ctx, tools.register(createPingTool({ status })));
+    if (tools && typeof tools.register === 'function') {
+      keep(ctx, tools.register(createPingTool({ status })));
+      keep(ctx, tools.register(createProposeTool({ getApp, currentTurn: () => currentTurn })));
+    }
   });
 
   // Observe the text entering each step and keep the snapshot fresh. The
@@ -539,6 +638,12 @@ export function apply(ctx) {
   attempt(() => {
     if (typeof ctx.on !== 'function') return;
     const onPreStep = function onPreStep(payload, next) {
+      // The propose tool binds its evidence to this turn, so it must know it.
+      currentTurn = payload !== null && payload !== undefined
+        && payload.agent !== null && payload.agent !== undefined && typeof payload.agent.id === 'string'
+        && Number.isInteger(payload.turn)
+        ? { sessionId: payload.agent.id, turn: payload.turn }
+        : null;
       const observed = injection.observe(this === undefined ? ctx : this, payload);
       try {
         proposed = observed === null ? [] : extractCandidates(observed.text);
