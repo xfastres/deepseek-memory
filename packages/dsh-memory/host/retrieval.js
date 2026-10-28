@@ -10,6 +10,54 @@ const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
 const WORD = /[a-z0-9]+/giu;
 
 /**
+ * Cross-language aliases, both directions.
+ *
+ * A user asks "命令行用哪个 shell" while the memory says "用 pwsh 而不是 bash";
+ * lexical scoring cannot see that those are the same topic. A vector index
+ * would, but the roadmap keeps that for when the evaluation set proves the
+ * need — and one narrow gap is cheaper to close with a curated table than with
+ * an embedding pipeline nobody can debug.
+ *
+ * Only terms whose meaning is unambiguous belong here. The table is small on
+ * purpose: an alias that is wrong makes a memory appear where it does not
+ * belong, which is worse than a miss.
+ */
+const ALIASES = new Map([
+  ['shell', ['bash', 'pwsh', 'zsh', 'terminal', '命令行', '终端']],
+  ['bash', ['shell', 'pwsh', '命令行']],
+  ['pwsh', ['shell', 'bash', 'powershell', '命令行']],
+  ['test', ['测试']],
+  ['测试', ['test']],
+  ['deps', ['依赖', 'dependency']],
+  ['依赖', ['deps', 'dependency']],
+  ['commit', ['提交']],
+  ['提交', ['commit']],
+  ['ledger', ['账本']],
+  ['账本', ['ledger']],
+  ['prompt', ['提示词']],
+  ['提示词', ['prompt']],
+  ['memory', ['记忆']],
+  ['记忆', ['memory']],
+  ['retrieval', ['检索']],
+  ['检索', ['retrieval']],
+  ['session', ['会话']],
+  ['会话', ['session']],
+]);
+
+/** Expand grams with their aliases, so a synonym matches without a rewrite. */
+export function expandGrams(units) {
+  const expanded = new Set(units);
+  for (const unit of units) {
+    const aliases = ALIASES.get(unit);
+    if (aliases === undefined) continue;
+    for (const alias of aliases) {
+      for (const gram of grams(alias)) expanded.add(gram);
+    }
+  }
+  return expanded;
+}
+
+/**
  * Split text into comparable units: latin words plus CJK bigrams. Chinese has
  * no spaces, so bigrams are the smallest unit that still recalls a phrase.
  */
@@ -66,8 +114,8 @@ export function eligibility(memory, { now = new Date(), scope = 'global', includ
  */
 export function scoreMemory(memory, query, options = {}) {
   const now = options.now ?? new Date();
-  const queryGrams = grams(query);
-  const memoryGrams = grams(`${memory.content} ${(memory.tags ?? []).join(' ')} ${(memory.entities ?? []).join(' ')}`);
+  const queryGrams = expandGrams(grams(query));
+  const memoryGrams = expandGrams(grams(`${memory.content} ${(memory.tags ?? []).join(' ')} ${(memory.entities ?? []).join(' ')}`));
   const lexical = lexicalScore(queryGrams, memoryGrams);
   const recency = recencyScore(memory.accepted_at ?? memory.updated_at, now);
   const importance = Math.min(5, Math.max(1, Number(memory.importance) || 3)) / 5;
