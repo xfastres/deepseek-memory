@@ -19,6 +19,7 @@ import { join } from 'node:path';
 
 import { LedgerLockError, RepoLock } from '../../provider-git-ledger/src/lock.js';
 import { toLedgerType } from './memory-types.js';
+import { isCorrectionKind } from './corrections.js';
 
 export const RUNTIME_FILE = 'runtime.json';
 export const RUNTIME_VERSION = 1;
@@ -190,12 +191,18 @@ export function createRuntimeStore(options = {}) {
     async addObjection(input = {}) {
       const memoryId = typeof input.memoryId === 'string' ? input.memoryId.trim() : '';
       if (memoryId === '') throw new RuntimeStoreError('objection needs a memory id', 'empty');
+      // The kind is the machine-readable reason; an unknown one is refused
+      // rather than defaulted, so "wrong" is never invented on the user's behalf.
+      if (input.kind !== undefined && input.kind !== null && !isCorrectionKind(input.kind)) {
+        throw new RuntimeStoreError(`unknown correction kind: ${String(input.kind)}`, 'invalid-kind');
+      }
       return mutate((document) => {
         const twin = document.objections.find((entry) => entry.memory_id === memoryId && entry.status === 'active');
         if (twin) throw new RuntimeStoreError('this memory is already objected', 'duplicate');
         const objection = {
           id: objectionId(now()),
           memory_id: memoryId,
+          kind: isCorrectionKind(input.kind) ? input.kind : null,
           reason: typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : '',
           status: 'active',
           created_at: now().toISOString(),

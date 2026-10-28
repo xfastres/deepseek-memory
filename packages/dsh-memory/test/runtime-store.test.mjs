@@ -236,3 +236,23 @@ test('a runtime document without objections still loads', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('an objection keeps its correction kind and refuses an unknown one', async () => {
+  await withRoot(async (root) => {
+    const store = createRuntimeStore({ root });
+    const objection = await store.addObjection({ memoryId: 'M-1', kind: 'too_broad', reason: '太宽了' });
+    assert.equal(objection.kind, 'too_broad');
+    assert.equal(objection.reason, '太宽了');
+    const plain = await store.addObjection({ memoryId: 'M-2' });
+    assert.equal(plain.kind, null, 'an absent kind stays null, not "wrong"');
+
+    await assert.rejects(() => store.addObjection({ memoryId: 'M-3', kind: 'maybe' }), (error) => {
+      assert.equal(error.code, 'invalid-kind');
+      return true;
+    });
+
+    const reopened = createRuntimeStore({ root });
+    const listed = await reopened.listObjections();
+    assert.deepEqual(listed.map((entry) => entry.kind), ['too_broad', null]);
+  });
+});

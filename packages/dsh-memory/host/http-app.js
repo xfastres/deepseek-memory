@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { classifyCandidates } from './classification.js';
 import { evaluateCandidatePolicies } from './policy.js';
 import { toLedgerType } from './memory-types.js';
+import { CORRECTION_KINDS } from './corrections.js';
 
 import { createLedgerService, toApiError } from './ledger-service.js';
 import { applyMigration, planMemoryMigration } from './migration.js';
@@ -126,7 +127,7 @@ export function createMemoryApp(options = {}) {
     if (error && typeof error.code === 'string') {
       const status = error.code === 'missing' ? 404
         : error.code === 'duplicate' ? 409
-          : error.code === 'no-evidence' || error.code === 'empty' ? 422
+          : error.code === 'no-evidence' || error.code === 'empty' || error.code === 'invalid-kind' ? 422
             : error.code === 'busy' ? 503
               : 500;
       writeJson(res, status, { ok: false, error: error.code });
@@ -430,7 +431,7 @@ export function createMemoryApp(options = {}) {
         if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
         try {
           const objections = await runtime.listObjections();
-          writeJson(res, 200, { ok: true, objections, suppressed: await runtime.suppressedIds() });
+          writeJson(res, 200, { ok: true, objections, suppressed: await runtime.suppressedIds(), kinds: CORRECTION_KINDS });
         } catch (error) {
           runtimeFail(res, error);
         }
@@ -446,7 +447,7 @@ export function createMemoryApp(options = {}) {
         const state = await service.state();
         const known = Array.isArray(state.memories) && state.memories.some((memory) => memory !== null && typeof memory === 'object' && memory.id === memoryId);
         if (!known) { writeJson(res, 404, { ok: false, error: 'missing' }); return; }
-        const objection = await runtime.addObjection({ memoryId, reason: body.reason });
+        const objection = await runtime.addObjection({ memoryId, kind: body.kind, reason: body.reason });
         writeJson(res, 200, { ok: true, objection, suppressed: await runtime.suppressedIds() });
       } catch (error) {
         runtimeFail(res, error);

@@ -97,6 +97,8 @@
 > - `GET /objections` → `{ ok, objections: [{ id, memory_id, reason, status, created_at, reinstated_at? }], suppressed: [memoryId] }`（只读）；
 > - `POST /objections { memoryId, reason? }` → 记录一条「用户认为这条记忆有误」的异议；memoryId 不在账本中返回 `404 missing`；同一记忆已有生效异议返回 `409 duplicate`；不写 Git、不改记忆状态；
 > - `POST /objections/clear { memoryId }` → 撤销该记忆的生效异议（保留异议历史，状态改 `reinstated`）；无生效异议返回 `404 missing`。
+> 异议类型（`kind`，$10.1 纠错入口的机器可读部分）：`wrong` / `too_broad` / `outdated` / `missing_context` / `wrong_scope` / `duplicate` / `should_not_save` / `delete`。`GET /objections` 返回当前词汇表 `kinds`；`POST /objections` 可带 `kind`，未知值返回 `422 invalid-kind`（不会默认成 `wrong`）；`reason` 仍是自由文本备注。
+>
 > 生效异议的记忆在**下一次注入快照刷新**时被过滤，检索与注入都不会再使用它（D7：不等待后台提案完成）。账本内容、状态、版本历史都不受影响；要正式撤回仍走 `/retract`。
 
 > 记忆类型（写入约束）：候选的 `type` 落库前统一为账本词汇 `MEMORY_TYPES`；规则名 `instruction` 映射为 `constraint`（同一含义，避免接受时才因类型不合法失败）。账本无法存储的类型在 `/review` 接受时返回 `422 {"error":"invalid-type","candidateType":...}`，候选保持 `pending`，不写入、不改类型。

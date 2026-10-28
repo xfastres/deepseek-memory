@@ -620,3 +620,40 @@ test('an objection suppresses a memory without touching the ledger', async () =>
     assert.equal(untrusted.status, 403);
   });
 });
+
+test('the objection routes speak the correction vocabulary', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({
+      dataDir: dir,
+      sessionQuery: {
+        async listEvents() { return LOG; },
+        async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
+      },
+    });
+    const added = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { content: '项目使用 pnpm', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    const memoryId = added.json.memory.id;
+
+    const listed = await call(app, '/api/dsh-memory/objections');
+    assert.equal(listed.json.kinds.length, 8);
+    assert.ok(listed.json.kinds.includes('too_broad'));
+
+    const objected = await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId, kind: 'outdated', reason: '已经过期' },
+    });
+    assert.equal(objected.status, 200);
+    assert.equal(objected.json.objection.kind, 'outdated');
+
+    const invalid = await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId, kind: 'maybe' },
+    });
+    assert.equal(invalid.status, 422);
+    assert.equal(invalid.json.error, 'invalid-kind');
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 1);
+  });
+});

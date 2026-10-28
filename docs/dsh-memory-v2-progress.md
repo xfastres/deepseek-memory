@@ -1016,3 +1016,13 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `client.js`：账本行新增「标记有误」（两步确认）与「恢复使用」；生效异议显示 `已抑制` 徽标；Host 客户端新增 `objections()`、`object({memoryId, reason?})`、`clearObjection({memoryId})`；中英词典各 7 条。
 - 测试：`runtime-store` +2（异议持久化/去重/恢复与历史保留/无异议报 missing；旧 `runtime.json` 无 `objections` 仍加载）；`injection` +3（被异议记忆不进入 `snapshot.memories` 也不进入 prompt，兄弟记忆仍在；无 `suppressed` 契约时行为不变；`suppressed` 抛错时退回不过滤而非崩溃）；`http-app` +1（异议后 `/state` 记忆仍 active 且账本零改动、`suppressed` 生效、撤销后清空、未知 id 404、跨站请求 403）；`client-panels` +2（异议请求路径与「不伪造 reason」、中英词典键存在）；完整套件 **289/289 通过**；`git diff --check` 退出码 0。
 - 未验证：真实宿主上的立即抑制（需要新进程 + 真实对话：异议写入后下一次 pre-step 刷新才生效，最长 30 秒 TTL 或下一次 step 边界）；浏览器视觉与两步确认交互；生产数据未触碰。
+
+### 迭代 19（2026-10-28，阶段 4.6 第一步：纠错词汇表）
+- 依据：`roadmap §10.1.7` 纠错入口（错误、太宽泛、过期、缺少上下文、范围错误、重复、不应保存、删除）、`§10.2`（修改前后用 diff、区分「LLM 建议」与正式版本）。此前异议只有自由文本 `reason`，机器无法据此区分「太宽泛」和「记错了」，也没有一致的词汇让 UI/Host/测试共享。
+- 实现（附加式）：
+  - 新增 `host/corrections.js`：`CORRECTION_KINDS` 八种（顺序与 §10.1.7 一致）+ `isCorrectionKind`。
+  - `runtime-store.addObjection` 接受 `kind`：合法值落库，未知值抛 `invalid-kind`（**不默认成 `wrong`**），缺失存 `null`。
+  - `host/http-app.js`：`GET /objections` 增加 `kinds` 词汇表（UI 不重复维护一份）；`POST /objections` 透传 `kind`；`invalid-kind` 映射 422。
+  - `client.js`：`correctionLabel` 中英映射（未知 kind 返回 `null`，不编造）；异议两步确认中增加「问题类型」选择器（选项来自 Host 的 `kinds`，不再复制列表）；`object()` 只在有值时发送 `kind`。
+- 测试：新增 `corrections.test.mjs` 2 项（词汇表与 §10.1.7 一致、未知值拒绝）；`runtime-store` +1（kind 持久化、缺失为 null、未知 `invalid-kind`）；`http-app` +1（`kinds` 8 项、`kind` 落库、未知 kind 422 且账本零改动）；`client-panels` +1（标签映射、不伪造 reason、kind 随请求发送）；完整套件 **294/294 通过**；`git diff --check` 退出码 0。
+- 尚未完成（如实记录）：`§10.2` 的「让 LLM 提出修改」尚无模型侧入口（现有工具只有 `dsh_memory_ping`），4.6 的「定位记忆 → 核查证据 → 生成提案」目前只具备人工路径：异议记录 + 证据指针 + 手动编辑/合并/撤回；LLM 提案工具需要单独设计并与既有工具契约对齐。

@@ -585,3 +585,21 @@ test('the objection words exist in both dictionaries', async () => {
     assert.equal(typeof en[key], 'string', 'missing en text for ' + key);
   }
 });
+
+test('correction kinds are named, and an unknown kind is not translated', async () => {
+  const { plugin, t } = await load();
+  assert.equal(plugin.correctionLabel('wrong', t), '错误');
+  assert.equal(plugin.correctionLabel('too_broad', t), '太宽泛');
+  assert.equal(plugin.correctionLabel('missing_context', t), '缺少上下文');
+  assert.equal(plugin.correctionLabel('should_not_save', t), '不应保存');
+  assert.equal(plugin.correctionLabel('nonsense', t), null);
+  assert.equal(plugin.correctionLabel(null, t), null);
+
+  const calls = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+  });
+  await client.object({ memoryId: 'M-1', kind: 'too_broad' });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { memoryId: 'M-1', kind: 'too_broad' }, 'the kind travels, no reason is invented');
+});

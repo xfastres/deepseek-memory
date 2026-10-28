@@ -56,7 +56,9 @@ window.__ModuleLoader__.load({
       origin: '来源', originRule: '自动提取', originUser: '用户手动', originLegacy: '旧数据迁移', originLlm: '模型建议',
       sourceKindUserExplicit: '用户明确', sourceKindUserCorrection: '用户纠正', sourceKindSessionExtraction: '会话提取', sourceKindAgentInference: '模型推断',
       decisionNew: '新增', decisionDuplicate: '与现有记忆相同', decisionConflict: '需与现有记忆合并', decisionTarget: '参照 {id}',
-      object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reinstate: '恢复使用',
+      object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reinstate: '恢复使用', objectKind: '问题类型',
+      kindWrong: '错误', kindTooBroad: '太宽泛', kindOutdated: '过期', kindMissingContext: '缺少上下文',
+      kindWrongScope: '范围错误', kindDuplicate: '重复', kindShouldNotSave: '不应保存', kindDelete: '删除',
       objectedDone: '已标记有误：这条记忆会立即退出检索与注入，账本内容不变。', objectFailed: '标记失败，请重试。', reinstateDone: '已恢复使用。',
       policy: '策略', policyAutoAccept: '可自动接受', policyAutoAcceptOff: '可自动接受（自动接受已关闭）', policyReview: '待复核', policyConflict: '冲突待处理', policyNoChange: '无需变化', policyReject: '拒绝写入',
       recentChanges: '最近变更 · Git 留痕（{count} 条）', recentChangesEmpty: '账本还没有提交记录。',
@@ -125,7 +127,9 @@ window.__ModuleLoader__.load({
       origin: 'Origin', originRule: 'auto-extracted', originUser: 'added by user', originLegacy: 'legacy import', originLlm: 'model suggestion',
       sourceKindUserExplicit: 'stated by user', sourceKindUserCorrection: 'user correction', sourceKindSessionExtraction: 'session extraction', sourceKindAgentInference: 'agent inference',
       decisionNew: 'new', decisionDuplicate: 'same as an existing memory', decisionConflict: 'needs merging with an existing memory', decisionTarget: 'refers to {id}',
-      object: 'mark wrong', objectConfirm: 'confirm: mark wrong', objected: 'suppressed', reinstate: 'restore',
+      object: 'mark wrong', objectConfirm: 'confirm: mark wrong', objected: 'suppressed', reinstate: 'restore', objectKind: 'problem',
+      kindWrong: 'wrong', kindTooBroad: 'too broad', kindOutdated: 'outdated', kindMissingContext: 'missing context',
+      kindWrongScope: 'wrong scope', kindDuplicate: 'duplicate', kindShouldNotSave: 'should not be saved', kindDelete: 'delete',
       objectedDone: 'Marked wrong: this memory leaves retrieval and injection now; the ledger is unchanged.', objectFailed: 'Could not record the objection. Try again.', reinstateDone: 'Restored.',
       policy: 'Policy', policyAutoAccept: 'eligible for auto-accept', policyAutoAcceptOff: 'eligible, auto-accept off', policyReview: 'needs review', policyConflict: 'conflict to resolve', policyNoChange: 'no change needed', policyReject: 'rejected by policy',
       recentChanges: 'Recent changes · Git trail ({count})', recentChangesEmpty: 'The ledger has no commits yet.',
@@ -1017,8 +1021,9 @@ window.__ModuleLoader__.load({
           return get('/objections');
         },
         /** Call a memory wrong: runtime suppression only, never a ledger write. */
-        async object({ memoryId, reason }) {
+        async object({ memoryId, kind, reason }) {
           const body = { memoryId };
+          if (typeof kind === 'string' && kind !== '') body.kind = kind;
           if (typeof reason === 'string' && reason !== '') body.reason = reason;
           return post('/objections', body);
         },
@@ -1075,6 +1080,19 @@ window.__ModuleLoader__.load({
       while (i < a.length) { out.push({ kind: 'del', text: a[i] }); i += 1; }
       while (j < b.length) { out.push({ kind: 'add', text: b[j] }); j += 1; }
       return out;
+    }
+
+    /** A correction kind in words; unknown or absent stays silent. */
+    function correctionLabel(kind, t) {
+      if (kind === 'wrong') return t('kindWrong');
+      if (kind === 'too_broad') return t('kindTooBroad');
+      if (kind === 'outdated') return t('kindOutdated');
+      if (kind === 'missing_context') return t('kindMissingContext');
+      if (kind === 'wrong_scope') return t('kindWrongScope');
+      if (kind === 'duplicate') return t('kindDuplicate');
+      if (kind === 'should_not_save') return t('kindShouldNotSave');
+      if (kind === 'delete') return t('kindDelete');
+      return null;
     }
 
     /** The policy decision in words; unknown or absent stays silent. */
@@ -1443,11 +1461,12 @@ window.__ModuleLoader__.load({
         }, () => setChanges({ status: 'error', rows: [], head: null }));
       };
       /** Suppression from the Host runtime: objections, not ledger content. */
-      const [objections, setObjections] = useState({ status: 'idle', rows: [], suppressed: [] });
+      const [objections, setObjections] = useState({ status: 'idle', rows: [], suppressed: [], kinds: [] });
+      const [objectionKind, setObjectionKind] = useState('wrong');
       const [objectingId, setObjectingId] = useState(null);
       const loadObjections = () => {
         if (typeof fetch !== 'function') {
-          setObjections({ status: 'idle', rows: [], suppressed: [] });
+          setObjections({ status: 'idle', rows: [], suppressed: [], kinds: [] });
           return;
         }
         createHostClient(fetch).objections().then((data) => {
@@ -1455,8 +1474,9 @@ window.__ModuleLoader__.load({
             status: 'ready',
             rows: Array.isArray(data.objections) ? data.objections : [],
             suppressed: Array.isArray(data.suppressed) ? data.suppressed : [],
+            kinds: Array.isArray(data.kinds) ? data.kinds.filter((kind) => typeof kind === 'string') : [],
           });
-        }, () => setObjections({ status: 'error', rows: [], suppressed: [] }));
+        }, () => setObjections({ status: 'error', rows: [], suppressed: [], kinds: [] }));
       };
       const [query, setQuery] = useState('');
       const [typeFilter, setTypeFilter] = useState('');
@@ -1505,7 +1525,7 @@ window.__ModuleLoader__.load({
           setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
           setLedger([]);
           setHostQueue({ status: 'idle', rows: [], error: null });
-          setObjections({ status: 'idle', rows: [], suppressed: [] });
+          setObjections({ status: 'idle', rows: [], suppressed: [], kinds: [] });
         });
       };
       useEffect(() => { probeHost(); }, []);
@@ -1684,7 +1704,7 @@ window.__ModuleLoader__.load({
       const markObjection = (id) => {
         if (ledgerPending || typeof fetch !== 'function') return;
         setLedgerPending(true);
-        createHostClient(fetch).object({ memoryId: id }).then(() => {
+        createHostClient(fetch).object({ memoryId: id, kind: objectionKind }).then(() => {
           setLedgerPending(false);
           setObjectingId(null);
           setNotice(t('objectedDone'));
@@ -1738,6 +1758,14 @@ window.__ModuleLoader__.load({
             row.active && !objections.suppressed.includes(row.id)
               ? (objectingId === row.id
                 ? h(React.Fragment, null,
+                  h('select', {
+                    className: 'dm-input dm-objection-kind',
+                    'aria-label': t('objectKind'),
+                    value: objectionKind,
+                    disabled: ledgerPending,
+                    onChange: (event) => setObjectionKind(event.target.value),
+                  }, (objections.kinds.length > 0 ? objections.kinds : ['wrong']).map((kind) => h('option', { key: kind, value: kind },
+                    correctionLabel(kind, t) === null ? kind : correctionLabel(kind, t)))),
                   h('button', { type: 'button', className: 'dm-link dm-danger', disabled: ledgerPending, onClick: () => markObjection(row.id) }, t('objectConfirm')),
                   h('button', { type: 'button', className: 'dm-link', onClick: () => setObjectingId(null) }, t('cancel')))
                 : h('button', { type: 'button', className: 'dm-link', onClick: () => setObjectingId(row.id) }, t('object')))
@@ -2230,6 +2258,7 @@ window.__ModuleLoader__.load({
       createHostClient,
       hostLine,
       changeView,
+      correctionLabel,
       decisionLabel,
       policyLabel,
       originLabel,
