@@ -251,6 +251,52 @@ interface WebRoute {
 - 账本服务 8，约 13 秒
 - **合计 93 项全部通过**
 
+## 阶段 2.7 重启前能查的都查了（发现两个真问题）
+
+不重启也能验证一部分“插件到底会不会被正确加载”。这轮查了三件事，其中两件查出了问题。
+
+### 1. 插件能不能从 profile 里加载 → 能
+
+`~/.dsh/profiles/desktop/package.json` 的 `dsh.profile.bundles` 里有 `@local/dsh-memory`；`node_modules/@local/dsh-memory` 是指向 `F:\deepseek-memory\packages\dsh-memory` 的 Junction。
+
+直接按 App 的路径加载：
+
+```
+import('file:///C:/Users/..../.dsh/profiles/desktop/node_modules/@local/dsh-memory/index.js')
+→ LOADED_FROM_PROFILE function ["webServer","tools"] ... apply
+```
+
+模块图（含 `../../provider-git-ledger/src/*`）能正常求值，导出齐全。**注意 `ledger.js` 不 import `projection.js`**，所以 `node:sqlite` 不在启动路径上——Electron 里没有 `node:sqlite` 也不会影响加载。
+
+### 2. 发现的问题：`ctx.inject(deps, cb)` 这个用法没有依据
+
+原来 Host 半边用 `ctx.inject(['webServer'], cb)` 拿服务。查了证据：
+
+- 已安装的插件里**没有一个**用 `ctx.inject(`（扫了 60 个包）；
+- 服务契约明确写的是 `ctx.get("name")`（可选）和 `ctx.tools`（注入）；
+- 同 profile 的任务板插件用的是 `export const inject = [...]` + 直接访问。
+
+如果这个用法不存在，异常会被激活守卫吞掉，重启后表现为「路由没挂上」，白白浪费一次重启。
+
+已改为：`export const inject = ['webServer','tools']` + `ctx.get()` 优先、属性访问兜底。
+
+### 3. 发现的问题：git 子进程句柄不释放
+
+`provider-git-ledger/src/git.js` 的 `run()` 在 `close` 时没释放管道和句柄。Windows 上这会让每个 git 调用留下一个仍然被引用的 `ChildProcess`——测试进程因此不退出；在长期运行的 Host 里则是句柄累积。
+
+已改为在 `close` 时 `destroy()` 三个管道并 `unref()`。
+
+### 测试方式的一条经验
+
+写这条真实套接字测试时踩到：测试自己的 server 回调里抛了 `TypeError`，响应没写出去，socket 一直开着，于是 `node --test` 跑完全部用例却**不退出**。教训是「测试挂住」未必是产品泄漏，先看测试自己的错误。现在整套测试加 `--test-force-exit` 运行。
+
+### 累计测试
+
+- 快套件（客户端 18 + Host 12 + 真实 HTTP **5** + 证据 13 + 检索 12 + 运行时库 10）= 70
+- HTTP 应用 10
+- 迁移 7 + 账本 8 = 15
+- **合计 95 项全部通过**
+
 ## 下一步
 
-重启 → 看顶部状态行。之后：界面读写切到 Host（含候选队列与注入记录），阶段 3 手动注入。
+重启 → 看顶部状态行。这一轮把「激活方式不对」这个最可能的失败原因提前排掉了，所以重启的结果应该更有信息量。
