@@ -58,6 +58,7 @@ function toUiMemory(record, version) {
 
 export function createLedgerService(options = {}) {
   const { root, ownerId = OWNER_ID, verifyEvidence, now, lockTimeoutMs } = options;
+  let writerToken;
   if (typeof root !== 'string' || root === '') throw new Error('ledger root is required');
   const ledger = new MemoryLedger({ root, ownerId, verifyEvidence, now, lockTimeoutMs });
   let opening;
@@ -227,6 +228,35 @@ export function createLedgerService(options = {}) {
     return {
       status: result.status,
       change_id: result.change_id,
+      commit: result.commit,
+      memory: toUiMemory(result.memory, undefined),
+    };
+  }
+
+  /**
+   * Commit a proposal that MemoryWriter has already gated.
+   *
+   * MemoryWriter passes the Symbol it owns. A route or another host module
+   * does not have that Symbol, so this is not a second public write API.
+   * Actor and user_confirmed are taken from the proposal; this method does
+   * not invent "the user confirmed it".
+   */
+  async function applyGated(proposal, token) {
+    if (!writerToken || token !== writerToken || !proposal) {
+      const refused = new Error('applyGated is only available to MemoryWriter');
+      refused.name = 'WriteGateError';
+      refused.status = 403;
+      refused.error = 'forbidden';
+      throw refused;
+    }
+    const ready = await open();
+    const { token: _token, ...body } = proposal;
+    const result = await ready.apply({ ...body, owner_id: ownerId });
+    return {
+      status: result.status,
+      change_id: result.change_id,
+      commit: result.commit,
+      memory_id: result.memory_id,
       memory: toUiMemory(result.memory, undefined),
     };
   }
@@ -281,5 +311,24 @@ export function createLedgerService(options = {}) {
     });
   }
 
-  return { open, state, history, recentChanges, listMemories, add, update, retract, apply, errorFor: toApiError };
+  return {
+    open,
+    state,
+    history,
+    recentChanges,
+    listMemories,
+    add,
+    update,
+    retract,
+    apply,
+    applyGated,
+    /** MemoryWriter calls this once. A second registration is refused. */
+    bindWriter(token) {
+      if (typeof token !== 'symbol') throw new Error('writer token must be a symbol');
+      if (writerToken !== undefined) throw new Error('a writer is already bound');
+      writerToken = token;
+    },
+    ownerId,
+    errorFor: toApiError,
+  };
 }
