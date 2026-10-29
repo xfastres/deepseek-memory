@@ -14,6 +14,7 @@ import { classifyCandidates } from './classification.js';
 import { evaluateCandidatePolicies } from './policy.js';
 import { toLedgerType } from './memory-types.js';
 import { CORRECTION_KINDS } from './corrections.js';
+import { narrowingRequest } from './narrowing.js';
 import { AUTO_ACCEPT_TYPE_CHOICES, loadSettings, writeSettings } from './settings.js';
 import { isOpenCandidateStatus, PROPOSAL_ACTIONS } from './runtime-store.js';
 
@@ -490,7 +491,11 @@ export function createMemoryApp(options = {}) {
         const known = Array.isArray(state.memories) && state.memories.some((memory) => memory !== null && typeof memory === 'object' && memory.id === memoryId);
         if (!known) { writeJson(res, 404, { ok: false, error: 'missing' }); return; }
         const objection = await runtime.addObjection({ memoryId, kind: body.kind, reason: body.reason });
-        writeJson(res, 200, { ok: true, objection, suppressed: await runtime.suppressedIds() });
+        const memory = state.memories.find((entry) => entry !== null && typeof entry === 'object' && entry.id === memoryId);
+        // §6.6: a review objection does not invent a replacement. The response says
+        // why no proposal was written, so the panel cannot claim one is pending.
+        const narrowing = narrowingRequest({ objection, memory });
+        writeJson(res, 200, { ok: true, objection, suppressed: await runtime.suppressedIds(), review_pending: await runtime.reviewPendingIds(), narrowing });
       } catch (error) {
         runtimeFail(res, error);
       }

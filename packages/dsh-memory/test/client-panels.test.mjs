@@ -693,9 +693,10 @@ test('proposal decisions send the proposal id, the action, and only a real base 
   assert.deepEqual(calls.map((call) => call.url), ['api/dsh-memory/proposals', 'api/dsh-memory/proposals', 'api/dsh-memory/proposals']);
   assert.deepEqual(JSON.parse(calls[1].init.body), { proposalId: 'P-1', action: 'accept', expectedBaseChangeId: 'c-1' });
   assert.deepEqual(JSON.parse(calls[2].init.body), { proposalId: 'P-2', action: 'reject' }, 'a rejection carries no base change id');
-  for (const key of ['proposalsTitle', 'proposalsHint', 'proposalAccept', 'proposalReject', 'proposalStale', 'proposalMissingTarget', 'proposalAccepted', 'proposalRejected', 'proposalFailed', 'proposalBefore', 'proposalAfter']) {
+  for (const key of ['proposalsTitle', 'proposalsHint', 'proposalAccept', 'proposalReject', 'proposalStale', 'proposalMissingTarget', 'proposalAccepted', 'proposalRejected', 'proposalFailed', 'proposalBefore', 'proposalAfter', 'narrowingHeld']) {
     assert.notEqual(t(key), key, 'missing zh text for ' + key);
   }
+  assert.match(t('narrowingHeld'), /没有生成新表述/u, 'the panel must not imply a narrowing exists');
 });
 
 test('a new wording asks the Host to clear the review objection it answers', async () => {

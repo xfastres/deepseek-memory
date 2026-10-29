@@ -1188,3 +1188,14 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：`ledger-service` +1（ADD 与不带新引用的 UPDATE 都保留写入时的 `session_id`/`event_seq`）；`http-app` 既有 history 测试补断言（两版都带 `s1#2`）；`client-panels` 既有 versionView 测试补断言（无引用为空数组；重复与不完整引用被丢掉，不补造）。相关三文件 81/81 通过。
 - 未做：回滚仍未实现。roadmap 只要求审查与回滚约束，没有规定回滚是 `SUPERSEDE` 还是 `RETRACT + ADD`，本轮不擅自选一种写入语义。
 - 未验证：浏览器里点「查看原始证据」是否真能定位到该版本的事件；会话日志后来被压缩或删除时，按钮仍会显示，但打开结果依赖既有证据读取路径，未在真实宿主上确认。
+
+### 迭代 36（2026-10-29，阶段 6：收窄类异议「不编造替代表述」）
+- 依据：`roadmap §6.6`（用户说「太宽泛」只说明范围要重查，不代表认可任何替代表述；没有证据支持具体收窄方式时**不能直接编造新内容**，应询问用户或保留待处理）、`§13.3` 第 2 条（用户说「太宽泛」：不自动编造替代内容）。缺口证据：上一轮把核查类异议标成 `review_pending` 并给了出口，但系统对「该收窄成什么」没有任何表态，面板只显示「待核查」，用户不知道是不是会有提案出现。
+- 先核对了可用能力：全仓搜索 `createLlm|chat.completions|models.` 无匹配，宿主侧没有任何可复用的模型调用点，因此**不能**在本轮生成 LLM 收窄提案；若强行生成一条，用户点「接受」就会把编造的句子写进正式记忆，与 §6.6 直接冲突。
+- 实现（只表达状态，不生成文本）：
+  - 新增 `host/narrowing.js`：`narrowingRequest({ objection, memory })` 返回 `{ propose: false, narrowed: false, reason }`，`reason` 区分 `not-a-review`（判错类异议）、`memory-unavailable`（不 active 或正文为空）、`no-evidence`（记忆没有可用引用）、`no-narrower-wording`（有证据，但证据只支持原句，不足以支持更窄写法）。
+  - `host/http-app.js`：`POST /objections` 响应新增 `narrowing` 与 `review_pending`。**不创建提案**——`/proposals` 在该请求后仍为空（有测试锁住）。
+  - `client.js`：新增 `narrowingHeld` 提示，标记收窄类异议后显示「已记下核查，但没有生成新表述…请手动修改、接受现状，或拒绝原句」；普通判错类仍显示原来的完成提示。
+- 测试：新增 `narrowing.test.mjs` 3 项（四种收窄类都不提议案、判错类为 `not-a-review`、记忆不可用/无证据各有明确原因）；`http-app` +1 并扩 1（`too_broad` 响应带 `no-narrower-wording` 且 `/proposals` 为空；`wrong` 返回 `not-a-review` 且不进 `review_pending`）；`client-panels` 补中文文案断言。相关三文件 71/71 通过。
+- 顺带修正文档漂移：`docs/dsh-memory-host-api.md` 原写「`AUTO_ACCEPT` 恒不会发生（自动接受开关未实现）」，与实现不符（`settings.js` 默认 `enabled: true, autoAccept: false`，`policy.js` 在开启时确实返回 `AUTO_ACCEPT` 并经同一 Writer 写入）。已改为「已实现但默认关闭」，并写明条件与幂等键。
+- 未验证：真实会话里用户是否会接受「请手动改写」这条路；面板提示的浏览器渲染未验证；一旦将来接入模型生成收窄提案，仍需「提案内容必须被证据原话覆盖」的校验，本轮没有该能力。

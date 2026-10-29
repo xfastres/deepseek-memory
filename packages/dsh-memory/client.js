@@ -59,6 +59,7 @@ window.__ModuleLoader__.load({
       object: '标记有误', objectConfirm: '确认标记有误', objected: '已抑制', reviewPendingBadge: '待核查', reinstate: '恢复使用', acceptAsIs: '接受现状', objectKind: '问题类型',
       candidateProposed: '已提出', candidateValidating: '校验中', candidateReviewPending: '待复核', candidateAutoAccepted: '自动接受',
       proposalsTitle: 'AI 提案（{count}）', proposalsHint: '来自模型的修改建议：接受才会写入账本，且按你看到的版本校验。',
+      narrowingHeld: '已记下核查，但没有生成新表述：证据只说明原句说过，不能据此编造更窄的版本。请手动修改、接受现状，或拒绝原句。',
       proposalsEmpty: '没有待处理的提案。', proposalAccept: '接受提案', proposalReject: '拒绝提案',
       proposalAdd: '新增', proposalUpdate: '修改', proposalMerge: '合并', proposalRetract: '撤回',
       proposalStale: '账本已变化，请刷新后再决定。', proposalMissingTarget: '目标记忆已不在账本中。',
@@ -141,6 +142,7 @@ window.__ModuleLoader__.load({
       reinstate: 'restore', objectKind: 'problem',
       candidateProposed: 'proposed', candidateValidating: 'validating', candidateReviewPending: 'needs review', candidateAutoAccepted: 'auto-accepted',
       proposalsTitle: 'AI proposals ({count})', proposalsHint: 'Suggestions from the model: nothing is written until you accept, checked against the version you see.',
+      narrowingHeld: 'Recorded for review, but no replacement was written: the evidence only shows the original sentence was said, so a narrower one would be invented. Edit it, keep it, or reject it.',
       proposalsEmpty: 'No open proposals.', proposalAccept: 'Accept proposal', proposalReject: 'Reject proposal',
       proposalAdd: 'add', proposalUpdate: 'update', proposalMerge: 'merge', proposalRetract: 'retract',
       proposalStale: 'The ledger changed; refresh before deciding.', proposalMissingTarget: 'The target memory is no longer in the ledger.',
@@ -1903,10 +1905,12 @@ window.__ModuleLoader__.load({
       const markObjection = (id) => {
         if (ledgerPending || typeof fetch !== 'function') return;
         setLedgerPending(true);
-        createHostClient(fetch).object({ memoryId: id, kind: objectionKind }).then(() => {
+        createHostClient(fetch).object({ memoryId: id, kind: objectionKind }).then((data) => {
           setLedgerPending(false);
           setObjectingId(null);
-          setNotice(t('objectedDone'));
+          setNotice(data !== null && typeof data === 'object' && data.narrowing && data.narrowing.reason === 'no-narrower-wording'
+            ? t('narrowingHeld')
+            : t('objectedDone'));
           loadObjections();
         }, () => {
           setLedgerPending(false);

@@ -945,9 +945,27 @@ test('objections tell the reader which memories are waiting for a review', async
       body: { memoryId: memory.id, kind: 'too_broad', reason: '太宽泛' },
     });
     assert.equal(broad.status, 200);
+    assert.deepEqual(broad.json.narrowing, { propose: false, narrowed: false, reason: 'no-narrower-wording' },
+      'a review objection says plainly that no replacement was written');
     const listed = await call(app, '/api/dsh-memory/objections');
     assert.deepEqual(listed.json.review_pending, [memory.id], 'a broadness objection asks for a re-check');
     assert.deepEqual(listed.json.suppressed, [memory.id], 'and it is still hidden until reviewed');
+    const proposals = await call(app, '/api/dsh-memory/proposals');
+    assert.deepEqual(proposals.json.proposals, [], 'nothing was fabricated for the user to accept later');
+  });
+});
+
+test('a verdict objection is not treated as a narrowing request', async () => {
+  await withApp(async (dir) => {
+    const app = createMemoryApp({ dataDir: dir });
+    const memory = await addMemory(app, '项目使用 pnpm');
+    const wrong = await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
+      body: { memoryId: memory.id, kind: 'wrong', reason: '记错了' },
+    });
+    assert.equal(wrong.status, 200);
+    assert.deepEqual(wrong.json.narrowing, { propose: false, narrowed: false, reason: 'not-a-review' });
+    assert.deepEqual(wrong.json.review_pending, [], 'a verdict objection is not waiting for new wording');
   });
 });
 
