@@ -5,7 +5,7 @@
 > - 记忆提供者：`F:\deepseek-memory`，git HEAD `970fd87`，核心包 `packages/provider-git-ledger`
 >
 > **调查轮次**：只读调查，未修改任何项目源码、未安装依赖、未改 Profile、未提交 git。
-> 本轮唯一写入：`docs/_investigation/` 下 4 份调查笔记（工作草稿，非交付物）。
+> 本轮唯一写入：`docs/investigation/notes/` 下 4 份调查笔记（工作草稿，非交付物）。
 >
 > **标注约定**
 > - **【已由源码确认】** 直接读到运行代码并交叉验证编译产物
@@ -13,7 +13,7 @@
 > - **【尚待实验验证】** 必须运行程序才能定论，本轮禁止执行
 >
 > 三名并行调查员的原始笔记（本报告的事实底稿）：
-> [A-bundle-loading.md](_investigation/A-bundle-loading.md) · [B-session-evidence.md](_investigation/B-session-evidence.md) · [C-ledger-reuse.md](_investigation/C-ledger-reuse.md) · [lead-verified-facts.md](_investigation/lead-verified-facts.md)
+> [A-bundle-loading.md](notes/A-bundle-loading.md) · [B-session-evidence.md](notes/B-session-evidence.md) · [C-ledger-reuse.md](notes/C-ledger-reuse.md) · [lead-verified-facts.md](notes/lead-verified-facts.md)
 
 ---
 
@@ -797,7 +797,7 @@ function invokeContainedSessionObservers(...): void {
 
 ### 5.1 文件级判定
 
-> 依据：[C-ledger-reuse.md](_investigation/C-ledger-reuse.md) §1、§5，Lead 已抽查核实。
+> 依据：[C-ledger-reuse.md](notes/C-ledger-reuse.md) §1、§5，Lead 已抽查核实。
 
 | 判定 | 文件 | 行数 | 理由 |
 |---|---|---|---|
@@ -861,7 +861,7 @@ ctx.effect(() => () => adapter.dispose())
 
 ### 5.5 七条不变量与去 SDK 后的影响
 
-> 依据：[C-ledger-reuse.md](_investigation/C-ledger-reuse.md) §3（表格），Lead 抽查 §5。
+> 依据：[C-ledger-reuse.md](notes/C-ledger-reuse.md) §3（表格），Lead 抽查 §5。
 
 | # | 不变量 | 守护机制 | 去 SDK 后 |
 |---|---|---|---|
@@ -1065,8 +1065,9 @@ F:\deepseek-memory\
 │           ├── lifecycle.spec.js     ⬜ dispose 后 sqlite 真关
 │           └── e2e-propose.spec.js   ⬜ 端到端：假会话 → 真 Git 提交
 ├── docs/
-│   ├── _investigation/               ← 本轮调查笔记（草稿）
-│   └── dsh-native-memory-plugin-investigation.md   ← 本报告
+│   └── investigation/
+│       ├── notes/                    ← 本轮调查笔记（草稿）
+│       └── dsh-native-memory-plugin-investigation.md   ← 本报告
 └── ...
 ```
 
@@ -1334,7 +1335,7 @@ packages/dsh-memory/            ← 全新 DSH 原生插件，import 前者核�
 - ✅ 未修改 `package.json` / 锁文件 / Provider 代码
 - ✅ 未创建 git 提交、未推送
 - ✅ 未使用假想 API；所有接口均回到 `69646b1` 源码
-- ✅ 唯一写入：`docs/_investigation/` 4 份调查笔记（明确标记为草稿）
+- ✅ 唯一写入：`docs/investigation/notes/` 4 份调查笔记（明确标记为草稿）
 
 ### B. 证据交叉验证方式
 

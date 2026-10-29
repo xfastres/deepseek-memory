@@ -1582,5 +1582,5 @@ dsh --profile <tutor-profile> --dump-config 2>&1 | grep 'not found'
 - 未运行 `dsh` / `pnpm dsh` / 任何会写 profile 或 DSH_HOME 的命令。
 - 未安装依赖。
 - 未创建 git 提交。
-- 仅在 `F:\deepseek-memory\docs\_investigation\A-bundle-loading.md` 写入本文件。
+- 仅在 `F:\deepseek-memory\docs\investigation\notes\A-bundle-loading.md` 写入本文件。
 - 对本机 `C:\Users\yanghuisong\.dsh` 只做了**只读列举与读取**（`Get-ChildItem` / `Get-Content` / `Select-String`），未写入。

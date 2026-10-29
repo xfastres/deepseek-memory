@@ -1,6 +1,6 @@
 # dsh-memory v2 执行进度
 
-对照 [dsh-memory-roadmap-v2.md](dsh-memory-roadmap-v2.md)。只记录已验证的事实；未验证的一律标注。
+对照 [dsh-memory-roadmap-v2.md](../design/dsh-memory-roadmap-v2.md)。只记录已验证的事实；未验证的一律标注。
 
 ## 阶段 2.1 Host↔Client 通道最小实验
 
@@ -41,7 +41,7 @@ Host 半边还注册了 `dsh_memory_ping` 工具。重启后我可以用 `cordis
 
 ## 阶段 2.3 正式迁移设计
 
-**状态：设计文档完成**：[dsh-memory-host-api.md](dsh-memory-host-api.md)。
+**状态：设计文档完成**：[dsh-memory-host-api.md](../design/dsh-memory-host-api.md)。
 
 定稿的两个关键决策：
 
@@ -142,7 +142,7 @@ interface WebRoute {
 
 **3.1 的问题有答案了**：`agent/pre-step` 是 waterfall 事件，payload 里带 `{ agent, messages, turn, step, signal }`。也就是说注入点**能读到本轮用户消息和轮次号**，不需要别的手段。
 
-由此确定了注入方案（详见 [dsh-memory-phase3-design.md](dsh-memory-phase3-design.md)）：**pre-step 只观察不改写消息**，`systemPrompt.context` 在组装提示词时读取观察结果并注入一个独立上下文块。不往会话里塞伪造的用户消息——那会破坏“L0 是唯一事实源”。
+由此确定了注入方案（详见 [dsh-memory-phase3-design.md](../design/dsh-memory-phase3-design.md)）：**pre-step 只观察不改写消息**，`systemPrompt.context` 在组装提示词时读取观察结果并注入一个独立上下文块。不往会话里塞伪造的用户消息——那会破坏“L0 是唯一事实源”。
 
 **3.2 检索已实现**：`packages/dsh-memory/host/retrieval.js`，12 项测试。
 
@@ -619,7 +619,7 @@ e02dacb memory(add): M-20261028-64ee2f5f
 - 全量：**209 通过 / 0 失败**（node --test --test-force-exit）。
 
 ### D 真实运行（待用户执行）
-- 见 `docs/dsh-memory-phase4-acceptance.md`；需要重启 DSH 才能加载新的 Host half。
+- 见 `docs/ops/dsh-memory-phase4-acceptance.md`；需要重启 DSH 才能加载新的 Host half。
 - 未验证：真实 provider 注入块内容与预算、`/injections` 的真实返回、重启后持久化、`flush` 实际成功状态。
 
 ## 可交付版说明（2026-10-28 晚，第二轮迭代）
@@ -710,7 +710,7 @@ node --test --test-force-exit packages/dsh-memory/test/*.test.mjs
 - Profile：`F:\dsh-memory-test-home\profiles\memory-test`（仅 `cordis.patch.yml`/`package.json`，无 `node_modules`，未安装 dsh-memory bundle）。
 - 数据目录用环境变量隔离：`DSH_MEMORY_DATA_DIR=F:\dsh-memory-test-home\data`。
 - 自动化测试已按该方式隔离（每个测试用独立临时目录），不触碰生产 `~/.dsh/dsh-memory`。
-- 真实宿主验收步骤见 `docs/dsh-memory-phase4-acceptance.md`；未执行，不宣称通过。
+- 真实宿主验收步骤见 `docs/ops/dsh-memory-phase4-acceptance.md`；未执行，不宣称通过。
 
 ### 8. 本轮发现与修改
 
@@ -742,8 +742,8 @@ node --test --test-force-exit packages/dsh-memory/test/*.test.mjs
 |---|---|
 | `scripts/prepare-isolated-acceptance.mjs`（新） | 幂等生成隔离 fixture 记忆 + `injection.json`，拒绝生产路径，回读校验 |
 | `packages/dsh-memory/test/prepare-acceptance.test.mjs`（新，4 项） | 拒绝生产路径、指纹正确、二次执行不变、fixture 可识别 |
-| `docs/dsh-memory-phase4-acceptance.md`（重写） | 按核实的加载链路、数据路径、脚本与排查表重写 |
-| `docs/dsh-memory-injection.example.json`（更新） | 改为 fixture 生成的示例，与实现一致 |
+| `docs/ops/dsh-memory-phase4-acceptance.md`（重写） | 按核实的加载链路、数据路径、脚本与排查表重写 |
+| `docs/ops/dsh-memory-injection.example.json`（更新） | 改为 fixture 生成的示例，与实现一致 |
 
 ### 本轮修复的缺陷
 1. 脚本的跨盘符路径守卫误判（`relative()` 跨盘返回绝对路径）→ 修正。
@@ -784,7 +784,7 @@ node --test --test-force-exit packages/dsh-memory/test/*.test.mjs
 
 ### 隔离宿主
 - 只读检查未发现可从命令行启动 DSH 的入口（`F:\DsspSeekHarness\resources` 只有 `app.asar`），我**没有**尝试启动第二个实例，也没有重启生产 DSH。
-- 隔离验收仍需你按 `docs/dsh-memory-phase4-acceptance.md` 的 C/D 段执行。
+- 隔离验收仍需你按 `docs/ops/dsh-memory-phase4-acceptance.md` 的 C/D 段执行。
 
 ## 第六轮记录（2026-10-28T12:49:23.969Z）— UI 与测试
 
@@ -894,7 +894,7 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 
 ## L0–L3 架构现状与差距表（2026-10-28，按仓库既有决策核实）
 
-依据：`docs/dsh-memory-roadmap-v2.md`（§3.1 职责分离、§4 记忆模型、§12 路线图、§14 决策 D1–D12、§16 暂不做）、`docs/dsh-memory-v2-status.md`、实际代码与测试。
+依据：`docs/design/dsh-memory-roadmap-v2.md`（§3.1 职责分离、§4 记忆模型、§12 路线图、§14 决策 D1–D12、§16 暂不做）、`docs/status/dsh-memory-v2-status.md`、实际代码与测试。
 说明：L0 = 原始会话层（只读），L1 = 原子记忆（Git 账本为正式事实源），L2 = 场景记忆，L3 = 长期画像；D11 明确 L2/L3 后置。
 
 | 模块 | 设计要求 | 当前实现 | 证据 | 缺口 | 下一步 |
@@ -907,7 +907,7 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 | UI 与记忆流程 | 区分原始证据/候选/正式；从记忆定位证据；按钮行为真实 | 候选/正式/账本分区已存在；本轮新增证据定位（有引用才显示按钮，无引用只提示"没有可用的原始证据引用"，不伪造） | 本轮 `client.js` + `test/client-panels.test.mjs` 4 项 | 浏览器视觉与点击路径未验证 | 下一轮 |
 
 ### 迭代 5（2026-10-28，L0 缺口：从记忆定位原始证据）
-- 依据：`docs/dsh-memory-roadmap-v2.md` §4.1 要求"记忆记录保存会话 ID、事件序号"，§12 阶段 3.5/3.6 要求"能按会话/轮次查看具体记忆与版本"；但此前 UI 未暴露证据引用。
+- 依据：`docs/design/dsh-memory-roadmap-v2.md` §4.1 要求"记忆记录保存会话 ID、事件序号"，§12 阶段 3.5/3.6 要求"能按会话/轮次查看具体记忆与版本"；但此前 UI 未暴露证据引用。
 - 改动：`client.js` 新增 `evidenceRefsOf` / `locateTurnForEvent` / `evidenceTurn` / `ledgerEvidenceButton`；正式记忆卡与账本行在**确有 source_refs/source** 时显示"查看原始证据"，点击后经 `sessions.retain` 读取真实会话事件并复用 `ConversationView` 展示该轮；无引用、事件不在窗口、会话不可用三种情况分别给出不同提示，不伪造引用。
 - 测试：`client-panels` 新增 4 项（引用归一化与去重、seq 归属轮次、从会话事件重建轮次、账本行 refs 与按钮条件）；完整套件 **242/242 通过**；`git diff --check` 退出码 0。
 - 未验证：浏览器真实点击与视觉；真实宿主上旧会话（非今日）能否 retain 并读取；未对生产数据做任何写入。
@@ -1140,7 +1140,7 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 本轮修掉两个真实缺陷（不涉及数据格式）：
   1. `persona.js` 的 `PERSONA_TYPES` 含 `instruction`，但账本类型表（`provider-git-ledger/src/schema.js` 的 `MEMORY_TYPES`）没有该类型；规则类型 `instruction` 在写入边界被 `memory-types.js` 映射为 `constraint`。原实现会静默丢掉用户所有指令记忆。改为 `preference/constraint/decision`，并加两项测试：constraint 进入画像、账本中不可能出现 instruction。
   2. `scenarios.js` 的 `stableId` 用截断 40 字符的 key + 成员数量生成 id，两个共享长前缀的 session 会撞 id。改为「可读前缀 + 完整 key 与成员集合的 sha256 前 10 位」，并加「长前缀不同 session 仍是两个场景」测试。
-- 新增就绪度文档 `docs/dsh-memory-l2-l3-readiness.md`：含现状表、已修缺陷、**接线前置条件 7 条**（L1 稳定性、异议联动、scope 语义、复核触发、存储位置决策、注入禁令、UI 入口）、未决问题 3 条（goal 是否入画像、摘要由谁写、聚类阈值无真实数据支撑）。
+- 新增就绪度文档 `docs/design/dsh-memory-l2-l3-readiness.md`：含现状表、已修缺陷、**接线前置条件 7 条**（L1 稳定性、异议联动、scope 语义、复核触发、存储位置决策、注入禁令、UI 入口）、未决问题 3 条（goal 是否入画像、摘要由谁写、聚类阈值无真实数据支撑）。
 - 测试：`persona` 8→10 项、`scenarios` 8→9 项，两个文件 19/19 通过；完整套件见本轮记录；`git diff --check` 退出码 0。
 - 结论与边界：L2/L3 **仍未到可接线状态**——异议联动（改模块签名）、复核状态（新运行时字段）、存储位置（数据格式）三项都属「接口/格式变更或架构决策」，按规则先确认，不擅自启用。阶段 4/5 暂不启动。
 - 未验证：两个模块仅有构造数据的单元测试，无真实账本数据运行记录；阈值/聚类效果未在真实会话上观察。
@@ -1197,7 +1197,7 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `host/http-app.js`：`POST /objections` 响应新增 `narrowing` 与 `review_pending`。**不创建提案**——`/proposals` 在该请求后仍为空（有测试锁住）。
   - `client.js`：新增 `narrowingHeld` 提示，标记收窄类异议后显示「已记下核查，但没有生成新表述…请手动修改、接受现状，或拒绝原句」；普通判错类仍显示原来的完成提示。
 - 测试：新增 `narrowing.test.mjs` 3 项（四种收窄类都不提议案、判错类为 `not-a-review`、记忆不可用/无证据各有明确原因）；`http-app` +1 并扩 1（`too_broad` 响应带 `no-narrower-wording` 且 `/proposals` 为空；`wrong` 返回 `not-a-review` 且不进 `review_pending`）；`client-panels` 补中文文案断言。相关三文件 71/71 通过。
-- 顺带修正文档漂移：`docs/dsh-memory-host-api.md` 原写「`AUTO_ACCEPT` 恒不会发生（自动接受开关未实现）」，与实现不符（`settings.js` 默认 `enabled: true, autoAccept: false`，`policy.js` 在开启时确实返回 `AUTO_ACCEPT` 并经同一 Writer 写入）。已改为「已实现但默认关闭」，并写明条件与幂等键。
+- 顺带修正文档漂移：`docs/design/dsh-memory-host-api.md` 原写「`AUTO_ACCEPT` 恒不会发生（自动接受开关未实现）」，与实现不符（`settings.js` 默认 `enabled: true, autoAccept: false`，`policy.js` 在开启时确实返回 `AUTO_ACCEPT` 并经同一 Writer 写入）。已改为「已实现但默认关闭」，并写明条件与幂等键。
 - 未验证：真实会话里用户是否会接受「请手动改写」这条路；面板提示的浏览器渲染未验证；一旦将来接入模型生成收窄提案，仍需「提案内容必须被证据原话覆盖」的校验，本轮没有该能力。
 
 ### 迭代 37（2026-10-29，阶段 6：两条纠错入口对「收窄」说法一致）

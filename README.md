@@ -1,8 +1,8 @@
 # dsh-memory
 
-DeepSeek Harness（DSH）的原生长期记忆插件。它把用户确认过的事实写进本机 Git 账本，并在后续对话里按需注入，而不是把整段聊天压成摘要。
+[GitHub](https://github.com/xfastres/deepseek-memory) · DeepSeek Harness（DSH）的原生长期记忆插件。
 
-正式记忆必须能指回会话证据（`session_id` + `event_seq`），变更可追溯、可撤回、可纠正。提取、检索或存储失败时，主对话必须还能用。
+它把用户确认过的事实写进本机 Git 账本，并在后续对话里按需注入，而不是把整段聊天压成摘要。正式记忆必须能指回会话证据（`session_id` + `event_seq`），变更可追溯、可撤回、可纠正。提取、检索或存储失败时，主对话必须还能用。
 
 ## 它做什么
 
@@ -29,7 +29,7 @@ packages/dsh-memory/           DSH Cordis 插件（Host + Client）
   cordis.patch.yml             把插件插入 composition
 packages/provider-git-ledger/  Git 账本：唯一 Writer
 packages/l0-conversation/      L0 只读模型：事件 → 轮次时间线
-docs/                          调查、路线图、阶段设计
+docs/                          文档（按用途分类，见下）
 ```
 
 `@local/dsh-memory` 零运行时 npm 依赖。账本需要本机 `git`；检索探测 `node:sqlite` 的 FTS5 trigram（中文无分词器也能召回）。
@@ -96,11 +96,11 @@ flowchart LR
 
 ## HTTP
 
-Host 在回环地址注册 `/api/dsh-memory/*`。读请求要求回环 socket + 回环 Host，并拒绝跨站；写请求同样走这道围栏。
+Host 在回环地址注册 `/api/dsh-memory/*`。请求必须来自回环 socket，且 Host 头为回环地址，并拒绝跨站。读写共用这道围栏（`isTrustedWrite = isTrustedRead`）。
 
 常用路径：`/ping` `/state` `/history` `/changes` `/candidates` `/review` `/add` `/update` `/retract` `/objections` `/settings` `/proposals` `/injections` `/export` `/migrate`。
 
-契约见 [docs/dsh-memory-host-api.md](docs/dsh-memory-host-api.md)（文档里个别字段可能落后于代码，以 `host/http-app.js` 为准）。
+契约见 [docs/design/dsh-memory-host-api.md](docs/design/dsh-memory-host-api.md)。个别字段可能落后于代码，以 `packages/dsh-memory/host/http-app.js` 为准。
 
 ## 测试
 
@@ -118,6 +118,8 @@ node --test packages/l0-conversation/test/*.js
 node packages/dsh-memory/eval/run-extraction-eval.mjs
 ```
 
+2026-10-29 只读审计时：插件 375 + 账本 32 + L0 7，共 414 项通过。之后若加了测试，以当时命令输出为准。
+
 ## 设计约束
 
 1. **证据优先**：active 记忆必须带 `source_refs`；结论强度不能超过证据。
@@ -134,12 +136,22 @@ node packages/dsh-memory/eval/run-extraction-eval.mjs
 - 提取主要认中文显式说法（记住 / 决定 / 我更喜欢…）；英文和隐式偏好会漏
 - 正式记忆目前都是 `global` scope，没有 workspace 隔离
 - L2/L3 纯函数已有（`host/scenarios.js`、`host/persona.js`），界面尚未挂上
+- 写入门禁（统一批准、`writesEnabled`）仍是设计稿，见 [write-gate](docs/design/write-gate/)
 
-更细的调查与路线图：
+安全与测试基线见 [阶段 0 只读审计](docs/status/phase0-readonly-audit.md)。
 
-- [DSH 原生插件调查](docs/dsh-native-memory-plugin-investigation.md)
-- [v2.1 路线图](docs/dsh-memory-roadmap-v2.md)
-- [阶段进度](docs/dsh-memory-v2-progress.md)
+## 文档
+
+完整索引：[docs/README.md](docs/README.md)。按用途：
+
+| 目录 | 用途 | 入口 |
+|---|---|---|
+| [docs/investigation/](docs/investigation/) | 宿主调查 | [原生插件调查](docs/investigation/dsh-native-memory-plugin-investigation.md) |
+| [docs/design/](docs/design/) | 目标架构 | [v2.1 路线图](docs/design/dsh-memory-roadmap-v2.md) |
+| [docs/status/](docs/status/) | 实现与审计 | [进度](docs/status/dsh-memory-v2-progress.md) · [审计](docs/status/phase0-readonly-audit.md) |
+| [docs/ops/](docs/ops/) | 本机验收 | [隔离验收](docs/ops/dsh-memory-phase4-acceptance.md) |
+
+`docs/status/dsh-memory-plugin-report.md` 是 2026-10-28 的快照，内容已过时。
 
 ## 许可
 
