@@ -415,6 +415,22 @@ test('the history timeline keeps versions ordered and diffs them honestly', asyn
   assert.deepEqual(rows.map((row) => row.changeType), ['ADD', 'UPDATE']);
   assert.equal(rows[1].reason, '用户纠正');
   assert.equal(rows[0].reason, '');
+  assert.deepEqual(rows[0].refs, [], 'a version with no stored ref offers no evidence button');
+  assert.deepEqual(rows[1].refs, []);
+  const withRefs = plugin.versionView({
+    versions: [{
+      version: 1,
+      change_type: 'ADD',
+      content: '项目使用 pnpm',
+      source_refs: [
+        { session_id: 's1', event_seq: 2, event_type: 'user/message' },
+        { session_id: 's1', event_seq: 2 },
+        { session_id: '', event_seq: 9 },
+        'not-a-ref',
+      ],
+    }],
+  }).rows[0];
+  assert.deepEqual(withRefs.refs, [{ session_id: 's1', event_seq: 2 }], 'duplicates and incomplete refs are dropped, nothing is invented');
   assert.deepEqual(plugin.versionView({}).rows, []);
   const bare = plugin.versionView({ versions: [{}] }).rows[0];
   assert.equal(bare.version, null);

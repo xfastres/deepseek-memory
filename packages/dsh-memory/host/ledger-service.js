@@ -187,6 +187,11 @@ export function createLedgerService(options = {}) {
         actor: typeof change.actor === 'string' ? change.actor : null,
         content: typeof record.content === 'string' ? record.content : '',
         status: typeof record.status === 'string' ? record.status : null,
+        // Each version was written with its own refs; the timeline must be able
+        // to point at the words that version actually rested on.
+        source_refs: Array.isArray(record.source_refs)
+          ? record.source_refs.filter((ref) => ref !== null && typeof ref === 'object')
+          : [],
       };
     });
   }

@@ -1238,6 +1238,7 @@ window.__ModuleLoader__.load({
             reason: typeof source.reason === 'string' ? source.reason : '',
             committedAt: typeof source.committed_at === 'string' ? source.committed_at : null,
             content: typeof source.content === 'string' ? source.content : '',
+            refs: evidenceRefsOf(source),
           };
         }),
       };
@@ -2065,6 +2066,9 @@ window.__ModuleLoader__.load({
                   + ' · ' + (entry.changeType === null ? t('notProvided') : entry.changeType)
                   + (entry.committedAt === null ? '' : ' · ' + entry.committedAt)),
                 entry.reason === '' ? null : h('p', { className: 'dm-muted' }, entry.reason),
+                Array.isArray(entry.refs) && entry.refs.length > 0
+                  ? h('button', { type: 'button', className: 'dm-link', onClick: () => openEvidence({ source_refs: entry.refs }) }, t('viewEvidence'))
+                  : null,
                 h('pre', { className: 'dm-diff' }, diffLines(index === 0 ? '' : history.rows[index - 1].content, entry.content)
                   .map((line, lineIndex) => h('code', { key: String(lineIndex), className: 'dm-diff-' + line.kind },
                     (line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  ') + line.text + '\n')))))));

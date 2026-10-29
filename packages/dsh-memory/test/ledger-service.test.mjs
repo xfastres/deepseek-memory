@@ -249,3 +249,20 @@ test('a change whose record cannot be read shows null, not a guess', async () =>
     assert.equal(changes[0].before, null);
   });
 });
+
+test('each history version keeps the refs it was written with', async () => {
+  await withService(async (service) => {
+    const added = await service.add({ content: '项目使用 pnpm', type: 'fact', sourceRefs: REF });
+    await service.update({
+      memoryId: added.memory.id,
+      content: '项目使用 pnpm 9',
+      expectedBaseChangeId: added.memory.last_change_id,
+    });
+    const versions = await service.history(added.memory.id);
+    assert.equal(versions.length, 2);
+    assert.equal(versions[0].source_refs[0].session_id, 'session-a');
+    assert.equal(versions[0].source_refs[0].event_seq, 7);
+    assert.equal(versions[1].source_refs[0].event_seq, 7, 'an update that adds no ref does not drop the original');
+    assert.ok(versions.every((version) => Array.isArray(version.source_refs)));
+  });
+});

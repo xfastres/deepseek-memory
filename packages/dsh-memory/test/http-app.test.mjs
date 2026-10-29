@@ -401,6 +401,9 @@ test('history returns the version timeline oldest first and refuses the rest', a
     assert.deepEqual(history.json.versions.map((entry) => entry.version), [1, 2]);
     assert.equal(history.json.versions[0].content, '先记住这条约定');
     assert.equal(history.json.versions[1].content, '改成这条约定');
+    assert.deepEqual(history.json.versions[0].source_refs.map((ref) => ref.event_seq), [2]);
+    assert.equal(history.json.versions[0].source_refs[0].session_id, 's1');
+    assert.deepEqual(history.json.versions[1].source_refs.map((ref) => ref.event_seq), [2], 'an update that adds no ref keeps the one the version was written with');
     assert.match(history.json.versions[0].commit, /^[0-9a-f]{7,40}$/u);
     assert.equal(typeof history.json.versions[1].committed_at, 'string');
 
