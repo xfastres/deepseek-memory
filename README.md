@@ -36,16 +36,20 @@ docs/                          调查、路线图、阶段设计
 
 ## 工作原理
 
-```
-DSH 会话日志 L0（只读证据）
-        │
-        ├─► 规则提取 ─► 证据校验 ─► 策略
-        │                              ├─► 运行时队列（候选 / 异议 / 提案）
-        │                              └─► Writer ─► Git 账本
-        │                                              │
-        │                                         词面检索 + 预算
-        │                                              │
-        └──────── 用户正常对话 ◄──── 系统提示注入 ◄────┘
+实线是记忆路径。虚线是主对话本身：Agent 继续读 L0，记忆失败不得打断它。Git 账本是唯一正式事实源。
+
+```mermaid
+flowchart LR
+  l0["L0 会话日志"] --> extract["规则提取"]
+  extract --> evidence["证据校验"]
+  evidence --> policy["写入策略"]
+  policy --> runtime["运行时队列"]
+  policy --> writer["单一 Writer"]
+  runtime --> writer
+  writer --> ledger["Git 账本"]
+  ledger --> inject["检索注入"]
+  inject --> agent["DSH Agent"]
+  l0 -.-> agent
 ```
 
 两套存储，职责不同：
