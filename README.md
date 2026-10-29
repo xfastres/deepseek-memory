@@ -108,7 +108,42 @@ Host 在回环地址注册 `/api/dsh-memory/*`。读、写都要求回环 socket
 
 ## 观察一条消息的流转
 
-两个只读脚本，用来回答「我发一句话，记忆到底做了什么、往 prompt 里注入了什么」。它们不写账本、不改状态，只读 Host 路由和本地文件，并直接复用 `host/retrieval.js` 的渲染逻辑，所以打印出来的注入原文与真正进入 prompt 的一字不差。
+三个只读脚本，用来回答「我发一句话，记忆到底做了什么、往 prompt 里注入了什么」。它们不写账本、不改状态，并直接复用 `host/retrieval.js` 的渲染逻辑，所以打印出来的注入原文与真正进入 prompt 的一字不差。
+
+### 实时流水（推荐）—— `scripts/memory-flow-live.mjs`
+
+一发消息就实时打印：消息进来 → 提取 → 候选 → 快照 → 注入 → 面板调用，每一步都带真实数据。
+
+需要先开埋点（**只在启动 DSH 的环境里设置，然后重启 DSH**）：
+
+```powershell
+$env:DSH_MEMORY_TRACE = '1'
+```
+
+然后：
+
+```powershell
+node scripts/memory-flow-live.mjs                # 跟随最新事件
+node scripts/memory-flow-live.mjs --from-start   # 回放全部历史
+node scripts/memory-flow-live.mjs --compact      # 一行一事件
+```
+
+事件类型：
+
+| 事件 | 含义 |
+|---|---|
+| `pre-step:enter` | 消息进入，带会话/轮次/消息数 |
+| `observe` | 观察到的原文、lookup 路径、提取到的候选数 |
+| `candidate` | 候选入队（id、类型、置信度、规则） |
+| `candidate:policy` | 候选策略决策（自动接受 / 待审 / 冲突） |
+| `snapshot` | 快照刷新（记忆数、被屏蔽数、head） |
+| `constraints` | 约束解析结果 |
+| `inject` | **真正注入 prompt 的原文**、选中/排除每条及原因、池占用 |
+| `http` | 面板操作：路由、耗时、状态码 |
+| `propose` | AI 提案入队（不写账本） |
+| `search` | `memory_search` 调用结果 |
+
+埋点是 append-only 的 `trace.jsonl`（8 MiB 上限，超出轮转一次），每次写盘失败只记 drop 计数，绝不打断对话。
 
 ### `scripts/memory-flow-trace.mjs` —— 按 14 步打印真实数据
 
@@ -156,7 +191,7 @@ node scripts/memory-flow-watch.mjs --all    # 历史全打一遍
 node scripts/memory-flow-watch.mjs --query "你叫什么名字？"   # 预演
 ```
 
-两个脚本都自动探测端口（`--port` 可指定），并在找不到 Host 时明确报错而不是静默失败。
+三个脚本都自动探测端口（`--port` 可指定），并在找不到 Host 或埋点未开时明确报错而不是静默失败。
 
 完整的数据流转说明见 [docs/message-flow.md](docs/message-flow.md)。
 

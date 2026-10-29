@@ -14,6 +14,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 
 import {
   API_PREFIX,
@@ -30,6 +31,7 @@ import { matchKnownEntities } from './host/entity-match.js';
 import { extractCandidates } from './host/extraction.js';
 import { candidateStatusForPolicy, decideAutoMemory, writeAutoAccepted } from './host/auto-memory.js';
 import { searchMemories } from './host/search.js';
+import { createTrace, traceEnabled, TRACE_FILE } from './host/trace.js';
 
 export { API_PREFIX, isTrustedWrite, writeJson };
 
@@ -265,6 +267,16 @@ export function createProposeTool(options = {}) {
           reason: args.reason,
           sourceRef: ref,
         });
+        if (typeof options.trace === 'function') {
+          options.trace('propose', {
+            id: proposal.id,
+            action: proposal.action,
+            target: proposal.target_memory_id,
+            type: proposal.type,
+            content: String(proposal.content ?? '').slice(0, 200),
+            status: proposal.status,
+          });
+        }
         return {
           ok: true,
           proposal: {
@@ -348,6 +360,14 @@ export function createSearchTool(options = {}) {
         const state = await app.service.state();
         const memories = state !== null && state !== undefined && Array.isArray(state.memories) ? state.memories : [];
         const found = searchMemories(memories, args.query, { suppressedIds, type: args.type, limit: args.limit });
+        if (typeof options.trace === 'function') {
+          options.trace('search', {
+            query: String(args.query ?? '').slice(0, 200),
+            results: Array.isArray(found.results) ? found.results.length : 0,
+            hidden: found.hidden ?? 0,
+            reason: found.reason ?? null,
+          });
+        }
         return { ok: true, query: found.query, results: found.results, hidden: found.hidden, reason: found.reason };
       } catch {
         return { ok: false, error: 'search-failed' };
@@ -370,6 +390,69 @@ export function resolveDataDir(env = process.env) {
  */
 export function createRoutes({ dataDir = resolveDataDir(), lookup = () => undefined, getApp: shared, status } = {}) {
   const routes = [{ kind: 'exact', path: PING_PATH, handler: createPingHandler({ status }) }];
+  // `/trace` serves the append-only event stream. `?since=<seq>` returns only
+  // newer records, which is what a live follower needs; without it the whole
+  // file comes back, bounded by `limit`.
+  routes.push({
+    kind: 'exact',
+    path: `${API_PREFIX}/trace`,
+    handler: async (req, res) => {
+      if (req.method !== 'GET') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      let since = 0;
+      let limit = 200;
+      try {
+        const url = new URL(req.url, 'http://127.0.0.1');
+        const rawSince = url.searchParams.get('since');
+        const rawLimit = url.searchParams.get('limit');
+        if (rawSince !== null && rawSince !== '') {
+          if (!/^[0-9]+$/u.test(rawSince)) { writeJson(res, 400, { ok: false, error: 'bad-since' }); return; }
+          since = Number(rawSince);
+        }
+        if (rawLimit !== null && rawLimit !== '') {
+          if (!/^[0-9]+$/u.test(rawLimit)) { writeJson(res, 400, { ok: false, error: 'bad-limit' }); return; }
+          limit = Math.min(1000, Math.max(1, Number(rawLimit)));
+        }
+      } catch {
+        writeJson(res, 400, { ok: false, error: 'bad-request' });
+        return;
+      }
+      try {
+        const file = join(dataDir, TRACE_FILE);
+        let text = '';
+        try {
+          text = await readFile(file, 'utf8');
+        } catch {
+          writeJson(res, 200, { ok: true, enabled: traceEnabled(), count: 0, records: [], lastSeq: 0 });
+          return;
+        }
+        const records = [];
+        for (const line of text.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed === '') continue;
+          try {
+            const record = JSON.parse(trimmed);
+            if (record !== null && typeof record === 'object' && Number.isInteger(record.seq) && record.seq > since) {
+              records.push(record);
+            }
+          } catch {
+            // A half-written line at the tail is expected; skip it.
+          }
+        }
+        const kept = records.slice(-limit);
+        writeJson(res, 200, {
+          ok: true,
+          enabled: traceEnabled(),
+          count: kept.length,
+          total: records.length,
+          lastSeq: kept.length === 0 ? since : kept[kept.length - 1].seq,
+          records: kept,
+        });
+      } catch (error) {
+        writeJson(res, 500, { ok: false, error: 'trace-failed' });
+      }
+    },
+  });
   let app;
   const getApp = typeof shared === 'function' ? shared : () => {
     if (app === undefined) app = createMemoryApp({ dataDir, sessionQuery: lookup('sessionQuery') });
@@ -481,6 +564,10 @@ export function apply(ctx) {
     return app;
   };
 
+  // The trace is created once and shared by every seam below. `DSH_MEMORY_TRACE=1`
+  // turns it on; when it is off, `emit` is a cheap no-op.
+  const trace = createTrace({ dir: resolveDataDir() });
+
   const injection = createInjectionRuntime({
     service: {
       state: () => getApp().service.state(),
@@ -492,6 +579,7 @@ export function apply(ctx) {
   let currentTurn = null;
   const status = () => ({
     ...injectionSnapshot(injection, contextState),
+    trace: trace.stats(),
     context: contextState === undefined || contextState === null ? null : { ...contextState },
     constraints: (() => {
       const state = injection.constraints;
@@ -561,7 +649,21 @@ export function apply(ctx) {
               sourceRef: ref,
               entities: matchKnownEntities(entry.text, memories),
             })).then((candidate) => {
+              trace.emit('candidate', {
+                id: candidate.id ?? null,
+                text: String(candidate.text ?? '').slice(0, 200),
+                type: candidate.type ?? null,
+                confidence: candidate.confidence ?? null,
+                rule: candidate.reason ?? null,
+                entities: Array.isArray(candidate.entities) ? candidate.entities.length : 0,
+              });
               const decided = decideAutoMemory({ candidate, memories, settings, reviewPending });
+              trace.emit('candidate:policy', {
+                id: candidate.id ?? null,
+                decision: decided.policy.decision,
+                status: candidateStatusForPolicy(decided.policy.decision),
+                reasons: decided.policy.reasons ?? [],
+              });
               if (decided.policy.decision !== 'AUTO_ACCEPT') {
                 // The queue says what the policy decided, not just "pending".
                 return Promise.resolve(app.runtime.setCandidateStatus(candidate.id, candidateStatusForPolicy(decided.policy.decision))).catch(() => undefined);
@@ -712,12 +814,27 @@ export function apply(ctx) {
     }
     const provider = (context) => {
       try {
-        const text = injection.buildText(context && context.scope).text;
+        const built = injection.buildText(context && context.scope);
+        const text = built.text;
         contextState.calls += 1;
         contextState.chars += text.length;
+        trace.emit('inject', {
+          path: built.path ?? null,
+          chars: text.length,
+          chosen: Array.isArray(built.chosen) ? built.chosen.map((entry) => ({
+            id: entry.memory && entry.memory.id ? entry.memory.id : null,
+            kind: entry.kind ?? 'memory',
+            chars: entry.chars_used ?? (typeof entry.text === 'string' ? entry.text.length : 0),
+            reason: String(entry.reason ?? ''),
+          })) : [],
+          excluded: Array.isArray(built.excluded) ? built.excluded.slice(0, 20) : [],
+          pools: built.pools ?? null,
+          text,
+        });
         return text;
       } catch (error) {
         contextState.error = `provider: ${String(error && error.message ? error.message : error).slice(0, 120)}`;
+        trace.emit('inject:failed', { error: contextState.error });
         return '';
       }
     };
@@ -742,8 +859,20 @@ export function apply(ctx) {
       keep(ctx, webServer.register({
         ...route,
         handler: async (req, res) => {
-          await handler(req, res);
-          if (req.method !== 'GET') refresh();
+          // Every panel action goes through here, so this is the one seam that
+          // sees what the user clicked and whether the Host accepted it.
+          const started = Date.now();
+          try {
+            await handler(req, res);
+          } finally {
+            trace.emit('http', {
+              route: route.path,
+              method: req.method,
+              ms: Date.now() - started,
+              status: typeof res.statusCode === 'number' ? res.statusCode : null,
+            });
+            if (req.method !== 'GET') refresh();
+          }
         },
       }));
     }
@@ -753,8 +882,8 @@ export function apply(ctx) {
     const tools = service(ctx, 'tools');
     if (tools && typeof tools.register === 'function') {
       keep(ctx, tools.register(createPingTool({ status })));
-      keep(ctx, tools.register(createProposeTool({ getApp, currentTurn: () => currentTurn })));
-      keep(ctx, tools.register(createSearchTool({ getApp })));
+      keep(ctx, tools.register(createProposeTool({ getApp, currentTurn: () => currentTurn, trace: trace.emit })));
+      keep(ctx, tools.register(createSearchTool({ getApp, trace: trace.emit })));
     }
   });
 
@@ -770,12 +899,28 @@ export function apply(ctx) {
         && Number.isInteger(payload.turn)
         ? { sessionId: payload.agent.id, turn: payload.turn }
         : null;
+      trace.emit('pre-step:enter', {
+        sessionId: currentTurn === null ? null : currentTurn.sessionId,
+        turn: currentTurn === null ? null : currentTurn.turn,
+        step: payload !== null && payload !== undefined && Number.isInteger(payload.step) ? payload.step : null,
+        messages: Array.isArray(payload && payload.messages) ? payload.messages.length : 0,
+      });
       const observed = injection.observe(this === undefined ? ctx : this, payload);
       try {
         proposed = observed === null ? [] : extractCandidates(observed.text);
       } catch {
         proposed = [];
       }
+      trace.emit('observe', {
+        sessionId: currentTurn === null ? null : currentTurn.sessionId,
+        turn: currentTurn === null ? null : currentTurn.turn,
+        queryChars: observed === null ? 0 : String(observed.text ?? '').length,
+        query: observed === null ? '' : String(observed.text ?? '').slice(0, 500),
+        observePath: injection.observed,
+        lookupPath: injection.path,
+        candidates: proposed.length,
+        candidateRules: proposed.map((entry) => entry.rule),
+      });
       proposeForReview(payload, proposed);
       handleCorrection(payload, observed === null ? '' : observed.text);
       // A failed refresh must not skip registration: the two are separate
@@ -783,11 +928,30 @@ export function apply(ctx) {
       return Promise.resolve(injection.ensureFresh())
         .catch((error) => {
           contextState.error = `refresh: ${String(error && error.message ? error.message : error).slice(0, 120)}`;
+          trace.emit('refresh:failed', { error: contextState.error });
         })
         .then(() => {
+          const snapshot = injection.snapshot;
+          trace.emit('snapshot', {
+            memories: Array.isArray(snapshot.memories) ? snapshot.memories.length : 0,
+            suppressed: snapshot.suppressed ?? 0,
+            head: snapshot.head ?? null,
+            degraded: snapshot.degraded ?? null,
+          });
           refreshConstraints();
+          const constraints = injection.constraints;
+          trace.emit('constraints', {
+            loaded: constraints.loaded === true,
+            usable: Array.isArray(constraints.usable) ? constraints.usable.length : 0,
+            fallback: Array.isArray(constraints.fallback) ? constraints.fallback : [],
+          });
           flushInjections();
           ensureContext();
+          trace.emit('pre-step:exit', {
+            providerRegistered: contextState.registered === true,
+            skipped: contextState.skipped,
+            calls: contextState.calls,
+          });
         })
         .then(() => next());
     };
