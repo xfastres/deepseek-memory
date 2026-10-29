@@ -177,9 +177,18 @@ test('a candidate records where it came from and never invents one', async () =>
     const odd = await store.addCandidate({ text: '来路不明的一条', sourceRef: REF, origin: 'whatever' });
     assert.equal(odd.origin, null, 'an unknown origin is not stored as-is');
 
+    const instruction = await store.addCandidate({ text: '回答用中文', sourceRef: REF, type: 'instruction' });
+    assert.equal(instruction.type, 'constraint', 'the rule kind is stored as the ledger type');
+    await assert.rejects(
+      () => store.addCandidate({ text: '一条来路不明的候选', sourceRef: REF, type: 'gossip' }),
+      (error) => error.code === 'invalid-type',
+    );
+    const listed = await store.listCandidates();
+    assert.equal(listed.some((entry) => entry.type === 'gossip'), false, 'an unstorable type never enters the queue');
+
     const reopened = createRuntimeStore({ root });
-    const listed = await reopened.listCandidates();
-    assert.deepEqual(listed.map((entry) => entry.origin), ['rule', null, null]);
+    const persisted = await reopened.listCandidates();
+    assert.deepEqual(persisted.map((entry) => entry.origin), ['rule', null, null, null]);
   });
 });
 

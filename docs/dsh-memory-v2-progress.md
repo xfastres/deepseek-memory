@@ -1208,3 +1208,11 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：`correction-detect` +1（自然语言「太宽泛」→ `no-narrower-wording`、进 `reviewPendingIds`，并用 `searchMemories` + 运行时抑制列表证明该类记忆搜不到；无引用记忆 → `no-evidence`）；`host` 的自然语言纠错测试补断言（`injection.context.lastCorrection.narrowing === 'not-a-review'`）。相关三文件 32/32 通过。
 - 过程中修正：先把断言写成 `probe.context`，实际状态位于 `probe.injection.context`（`status()` 的返回值整体挂在 `injection` 下），按真实结构改正而非改实现迁就测试。
 - 未验证：模型是否真的会读这个诊断字段并改变行为（它只是可选工具输出，没有注入）；浏览器渲染未验证。
+
+### 迭代 38（2026-10-29，阶段 2：账本存不下的类型在入队时拒绝）
+- 依据：`roadmap §4.2`（L1 类型以账本词汇为准）、单一 MemoryWriter（写入边界只有一个）。缺口证据：`runtime-store.js` 的 `addCandidate` 注释写着「unsupported kind is kept as-is」，`toLedgerType` 失败时原样保存规则类型；`http-app.test` 原测试断言 `type: 'gossip'` 的候选 `POST /candidate` 返回 200，直到 `/review` 接受才 422。用户会看到一条永远无法接受的候选。
+- 实现：
+  - `host/runtime-store.js`：`addCandidate` 先做 `toLedgerType`，映射失败抛 `invalid-type`，不写入队列；未给类型仍按 `fact`；`instruction` 仍映射为 `constraint`。
+  - `host/http-app.js`：`runtimeFail` 把 `invalid-type` 映射为 422（此前会落成 500）。旧数据导入 `importCandidates` 已按错误码记入 `skipped`，因此带非法类型的旧候选被报告为跳过而不是中断导入。`/review` 的兜底检查保留，给队列里可能已存在的旧数据用。
+- 测试：`runtime-store` 既有用例扩断言（`instruction` → `constraint`；`gossip` 抛 `invalid-type` 且列表中不存在）；`http-app` 原「接受时拒绝」测试改为「入队即 422，队列为空，账本为空」。相关三文件 51/51 通过。
+- 未验证：真实运行时队列里是否已有旧的非法类型候选（若有，仍由 `/review` 兜底拒绝，本轮不迁移历史文件）。

@@ -139,7 +139,7 @@ export function createMemoryApp(options = {}) {
     if (error && typeof error.code === 'string') {
       const status = error.code === 'missing' ? 404
         : error.code === 'duplicate' ? 409
-          : error.code === 'no-evidence' || error.code === 'empty' || error.code === 'invalid-kind' ? 422
+          : error.code === 'no-evidence' || error.code === 'empty' || error.code === 'invalid-kind' || error.code === 'invalid-type' ? 422
             : error.code === 'busy' ? 503
               : 500;
       writeJson(res, status, { ok: false, error: error.code });

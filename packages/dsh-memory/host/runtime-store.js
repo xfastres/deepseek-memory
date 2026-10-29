@@ -221,15 +221,18 @@ export function createRuntimeStore(options = {}) {
       const turn = Number.isInteger(input.turn) ? input.turn : null;
       const sourceRef = input.sourceRef && typeof input.sourceRef === 'object' ? input.sourceRef : null;
       if (sourceRef === null) throw new RuntimeStoreError('candidate needs evidence', 'no-evidence');
+      // The ledger vocabulary is the only one a candidate may carry. Mapping
+      // (instruction -> constraint) happens here; an unmapped kind is refused
+      // now, not queued to fail later at review.
+      const mapped = typeof input.type === 'string' && input.type !== '' ? toLedgerType(input.type) : 'fact';
+      if (mapped === null) throw new RuntimeStoreError(`the ledger cannot store type ${input.type}`, 'invalid-type');
       return mutate((document) => {
         const twin = document.candidates.find((entry) => normalise(entry.text) === normalise(text) && isOpenCandidateStatus(entry.status));
         if (twin) throw new RuntimeStoreError('an identical candidate is already pending', 'duplicate');
         const candidate = {
           id: candidateId(now()),
           text,
-          // Stored in the ledger vocabulary so review cannot fail later on a
-          // type the ledger refuses. An unsupported kind is kept as-is.
-          type: (typeof input.type === 'string' ? toLedgerType(input.type) : null) ?? (typeof input.type === 'string' ? input.type : 'fact'),
+          type: mapped,
           status: 'proposed',
           session_id: sessionId,
           turn,

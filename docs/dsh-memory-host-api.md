@@ -132,7 +132,7 @@
 >
 > 收窄类异议不生成替代表述（§6.6）：`too_broad` / `missing_context` / `wrong_scope` / `duplicate` 的 `POST /objections` 响应额外带 `narrowing: { propose, narrowed, reason }`，当前恒为 `{ propose: false, narrowed: false }`，`reason` 取 `no-narrower-wording`（证据只说明原句说过，不足以支持更窄的写法）、`no-evidence`（该记忆没有可用引用）、`memory-unavailable`（不 active 或正文为空）或 `not-a-review`（判错类异议）。宿主**不会**为这些异议创建提案：接受一条编造出来的收窄建议会直接改写正式记忆。`host/narrowing.js` 只做这个判断，面板据此提示用户手动改写、接受现状或拒绝原句。
 
-> 记忆类型（写入约束）：候选的 `type` 落库前统一为账本词汇 `MEMORY_TYPES`；规则名 `instruction` 映射为 `constraint`（同一含义，避免接受时才因类型不合法失败）。账本无法存储的类型在 `/review` 接受时返回 `422 {"error":"invalid-type","candidateType":...}`，候选保持 `pending`，不写入、不改类型。
+> 记忆类型（写入约束）：候选的 `type` 在**入队时**就统一为账本词汇 `MEMORY_TYPES`；规则名 `instruction` 映射为 `constraint`（同一含义）。账本无法存储的类型在 `POST /candidate` 与旧数据导入时直接返回 `422 {"error":"invalid-type"}`，不进队列；`/review` 接受路径仍保留同一拒绝作为旧数据的兜底，但新写入不会再走到那里。未给 `type` 的候选按 `fact` 入队。
 
 > 策略决策（实现字段，只读派生）：`GET /candidates` 的每一项还带 `policy: { decision, reasons }`，取值即路线图 §7.1 的五种：`AUTO_ACCEPT` / `REVIEW_REQUIRED` / `CONFLICT` / `NO_CHANGE` / `REJECT`。自动接受**已实现但默认关闭**：只有 `enabled` 与 `autoAccept` 同时打开、且类型在允许清单内、置信度达阈值、有证据时才返回 `AUTO_ACCEPT` 并走同一 Writer 写入（幂等键 `auto:<candidateId>`）；写失败时候选保持待处理。开关见 `GET/POST /settings`，默认 `{ enabled: true, autoAccept: false }`。
 

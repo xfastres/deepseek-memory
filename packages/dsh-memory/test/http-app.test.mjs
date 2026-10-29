@@ -542,7 +542,7 @@ test('an extracted instruction is stored and accepted as a constraint', async ()
   });
 });
 
-test('accepting a candidate whose type the ledger cannot store is refused with a reason', async () => {
+test('a candidate the ledger cannot store is refused at the queue, not later', async () => {
   await withApp(async (dir) => {
     const app = createMemoryApp({
       dataDir: dir,
@@ -555,17 +555,11 @@ test('accepting a candidate whose type the ledger cannot store is refused with a
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
       body: { text: '一条来路不明的候选', type: 'gossip', sessionId: 's1', turn: 1 },
     });
-    assert.equal(queued.status, 200);
-    const refused = await call(app, '/api/dsh-memory/review', {
-      method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
-      body: { candidateId: queued.json.candidate.id, action: 'accept' },
-    });
-    assert.equal(refused.status, 422);
-    assert.equal(refused.json.error, 'invalid-type');
-    assert.equal(refused.json.candidateType, 'gossip');
+    assert.equal(queued.status, 422);
+    assert.equal(queued.json.error, 'invalid-type');
 
     const list = await call(app, '/api/dsh-memory/candidates');
-    assert.equal(list.json.candidates[0].status, 'proposed', 'a refused candidate stays open');
+    assert.deepEqual(list.json.candidates, [], 'an unstorable type never enters the queue');
     const state = await call(app, '/api/dsh-memory/state');
     assert.equal(state.json.memories.length, 0);
   });
