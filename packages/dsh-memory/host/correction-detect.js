@@ -15,6 +15,7 @@
 // (D7) and is not a ledger write. Editing or retracting stays a user decision.
 
 import { scoreMemory } from './retrieval.js';
+import { narrowingRequest } from './narrowing.js';
 
 /** The cues, strongest first. `kind` is a documented correction kind. */
 export const CORRECTION_CUES = Object.freeze([
@@ -114,7 +115,11 @@ export async function applyCorrection({ text, memories, suppressedIds, runtime }
   }
   try {
     const objection = await runtime.addObjection({ memoryId: decision.memoryId, kind: decision.kind, reason: decision.reason });
-    return { recorded: true, ...decision, objection };
+    // Both correction entries must say the same thing about a review objection:
+    // it is recorded, and no replacement wording exists yet (§6.6).
+    const memory = (Array.isArray(memories) ? memories : [])
+      .find((row) => row !== null && typeof row === 'object' && row.id === decision.memoryId) ?? null;
+    return { recorded: true, ...decision, objection, narrowing: narrowingRequest({ objection, memory }) };
   } catch (error) {
     const code = String((error && error.code) || 'failed');
     // An existing objection is the same outcome: the memory is already hidden.

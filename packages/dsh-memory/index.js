@@ -598,12 +598,14 @@ export function apply(ctx) {
             memories,
             suppressedIds,
             runtime: app.runtime,
-            now: payload !== null && payload !== undefined && Number.isInteger(payload.turn) ? payload.turn : undefined,
           }).then((decision) => {
             contextState.lastCorrection = {
               act: decision.act === true,
               recorded: decision.recorded === true,
               reason: decision.reason,
+              // Null when nothing was objected to; otherwise why no narrower
+              // wording exists, so the panel is not the only place that knows.
+              narrowing: decision.narrowing === undefined || decision.narrowing === null ? null : decision.narrowing.reason,
             };
             if (decision.recorded === true) {
               // A memory that was just called wrong must not come back in the

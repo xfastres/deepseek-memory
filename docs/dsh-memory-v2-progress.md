@@ -1199,3 +1199,12 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：新增 `narrowing.test.mjs` 3 项（四种收窄类都不提议案、判错类为 `not-a-review`、记忆不可用/无证据各有明确原因）；`http-app` +1 并扩 1（`too_broad` 响应带 `no-narrower-wording` 且 `/proposals` 为空；`wrong` 返回 `not-a-review` 且不进 `review_pending`）；`client-panels` 补中文文案断言。相关三文件 71/71 通过。
 - 顺带修正文档漂移：`docs/dsh-memory-host-api.md` 原写「`AUTO_ACCEPT` 恒不会发生（自动接受开关未实现）」，与实现不符（`settings.js` 默认 `enabled: true, autoAccept: false`，`policy.js` 在开启时确实返回 `AUTO_ACCEPT` 并经同一 Writer 写入）。已改为「已实现但默认关闭」，并写明条件与幂等键。
 - 未验证：真实会话里用户是否会接受「请手动改写」这条路；面板提示的浏览器渲染未验证；一旦将来接入模型生成收窄提案，仍需「提案内容必须被证据原话覆盖」的校验，本轮没有该能力。
+
+### 迭代 37（2026-10-29，阶段 6：两条纠错入口对「收窄」说法一致）
+- 依据：`roadmap §6.3`（同一异议事件的后续处理不该因入口不同而不同）、`§6.6`（不得编造替代内容）、`§13.3` 第 2 条。缺口证据：上一轮只让 `POST /objections` 返回 `narrowing`；`applyCorrection`（自然语言路径）只返回 `recorded`，`contextState.lastCorrection` 也只有 `act/recorded/reason`，模型侧看不到「这条记忆在等用户重写」。
+- 实现：
+  - `host/correction-detect.js`：`applyCorrection` 记录异议后，用同一个 `narrowingRequest`（传入目标记忆行）计算 `narrowing`，与 HTTP 响应同构；判错类返回 `not-a-review`，无引用记忆返回 `no-evidence`。
+  - `index.js`：`contextState.lastCorrection` 增加 `narrowing` 原因码（无异议时为 `null`），该状态经 `dsh_memory_ping` 的 `injection.context` 可读，不再只写在内存里；顺带删掉一处传给 `applyCorrection` 的无用 `now` 参数（该函数已不接受它）。
+- 测试：`correction-detect` +1（自然语言「太宽泛」→ `no-narrower-wording`、进 `reviewPendingIds`，并用 `searchMemories` + 运行时抑制列表证明该类记忆搜不到；无引用记忆 → `no-evidence`）；`host` 的自然语言纠错测试补断言（`injection.context.lastCorrection.narrowing === 'not-a-review'`）。相关三文件 32/32 通过。
+- 过程中修正：先把断言写成 `probe.context`，实际状态位于 `probe.injection.context`（`status()` 的返回值整体挂在 `injection` 下），按真实结构改正而非改实现迁就测试。
+- 未验证：模型是否真的会读这个诊断字段并改变行为（它只是可选工具输出，没有注入）；浏览器渲染未验证。

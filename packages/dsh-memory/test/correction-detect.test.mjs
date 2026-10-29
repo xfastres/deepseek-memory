@@ -6,6 +6,7 @@ import { test } from 'node:test';
 
 import { applyCorrection, correctionKinds, evaluateCorrection, isCorrectionCandidate } from '../host/correction-detect.js';
 import { createRuntimeStore } from '../host/runtime-store.js';
+import { searchMemories } from '../host/search.js';
 
 const REF = { session_id: 's1', event_seq: 2, event_type: 'user/message' };
 
@@ -87,6 +88,32 @@ test('recording the objection suppresses the memory at once', async () => {
     const again = await applyCorrection({ text: '这条 pnpm 记忆已经过时了', memories: [memory()], suppressedIds: await runtime.suppressedIds(), runtime });
     assert.equal(again.recorded, false);
     assert.equal(again.reason, 'no-target', 'already suppressed, nothing more to do');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a natural-language review objection says no replacement exists', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-narrow-'));
+  try {
+    const runtime = createRuntimeStore({ root: dir });
+    const withRefs = memory({ source_refs: [{ session_id: 's1', event_seq: 2, event_type: 'user/message' }] });
+    const broad = await applyCorrection({ text: '这条 pnpm 记忆太宽泛了', memories: [withRefs], runtime });
+    assert.equal(broad.recorded, true);
+    assert.equal(broad.objection.kind, 'too_broad');
+    assert.deepEqual(broad.narrowing, { propose: false, narrowed: false, reason: 'no-narrower-wording' },
+      'the natural-language path reports the same thing the panel does');
+    assert.deepEqual(await runtime.reviewPendingIds(), ['M-1']);
+
+    // The memory is hidden from search through the same suppression D7 uses.
+    const found = searchMemories([withRefs], 'pnpm', { suppressedIds: await runtime.suppressedIds() });
+    assert.deepEqual(found.results, [], 'a memory awaiting new wording is not searchable');
+    assert.equal(found.hidden, 1);
+
+    const noRefs = memory({ id: 'M-2', content: '项目使用 pnpm 管理依赖（旧）' });
+    const bare = await applyCorrection({ text: '这条 pnpm 记忆太宽泛了', memories: [noRefs], runtime });
+    assert.equal(bare.recorded, true);
+    assert.equal(bare.narrowing.reason, 'no-evidence', 'a memory with no citation cannot be narrowed against evidence');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

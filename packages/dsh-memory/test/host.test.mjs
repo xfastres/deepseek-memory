@@ -416,6 +416,11 @@ test('a natural-language correction hides the memory it clearly names', async ()
     assert.equal(objections[0].kind, 'outdated');
     assert.equal(objections[0].memory_id, suppressed[0]);
     assert.ok(objections[0].reason.includes('pnpm'), 'the reason keeps the user words, not an invention');
+
+    const probe = await tooled[0].execute();
+    assert.equal(probe.injection.context.lastCorrection.recorded, true);
+    assert.equal(probe.injection.context.lastCorrection.narrowing, 'not-a-review',
+      'an "outdated" verdict is not a narrowing request, and the probe says so');
   } finally {
     if (previous === undefined) delete process.env.DSH_MEMORY_DATA_DIR;
     else process.env.DSH_MEMORY_DATA_DIR = previous;
