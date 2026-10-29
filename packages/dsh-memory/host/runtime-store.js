@@ -375,6 +375,15 @@ export function createRuntimeStore(options = {}) {
       if (input.kind !== undefined && input.kind !== null && !isCorrectionKind(input.kind)) {
         throw new RuntimeStoreError(`unknown correction kind: ${String(input.kind)}`, 'invalid-kind');
       }
+      // An add proposal names the type the ledger will store. An update or a
+      // retract keeps the target's type, so a type there is ignored rather than
+      // becoming a second way to change it. An unmapped kind is refused before
+      // the proposal exists, the same rule a candidate follows.
+      let type = null;
+      if (action === 'add' && typeof input.type === 'string' && input.type !== '') {
+        type = toLedgerType(input.type);
+        if (type === null) throw new RuntimeStoreError(`the ledger cannot store type ${input.type}`, 'invalid-type');
+      }
       return mutate((document) => {
         const twin = document.proposals.find((entry) => entry.status === 'open'
           && entry.action === action
@@ -386,7 +395,7 @@ export function createRuntimeStore(options = {}) {
           action,
           target_memory_id: targetMemoryId === '' ? null : targetMemoryId,
           content: action === 'retract' ? '' : content,
-          type: typeof input.type === 'string' ? toLedgerType(input.type) ?? input.type : null,
+          type,
           kind: isCorrectionKind(input.kind) ? input.kind : null,
           reason: typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : '',
           origin: 'llm',

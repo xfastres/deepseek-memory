@@ -1216,3 +1216,9 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `host/http-app.js`：`runtimeFail` 把 `invalid-type` 映射为 422（此前会落成 500）。旧数据导入 `importCandidates` 已按错误码记入 `skipped`，因此带非法类型的旧候选被报告为跳过而不是中断导入。`/review` 的兜底检查保留，给队列里可能已存在的旧数据用。
 - 测试：`runtime-store` 既有用例扩断言（`instruction` → `constraint`；`gossip` 抛 `invalid-type` 且列表中不存在）；`http-app` 原「接受时拒绝」测试改为「入队即 422，队列为空，账本为空」。相关三文件 51/51 通过。
 - 未验证：真实运行时队列里是否已有旧的非法类型候选（若有，仍由 `/review` 兜底拒绝，本轮不迁移历史文件）。
+
+### 迭代 39（2026-10-29，阶段 2：提案的类型与候选用同一条规则）
+- 依据：`roadmap §4.2`、单一 MemoryWriter。缺口证据：上一轮 `addCandidate` 已对非法类型抛 `invalid-type`，但 `addProposal` 仍是 `toLedgerType(input.type) ?? input.type`，`gossip` 会原样进提案；`POST /proposals` 接受 `add` 时把 `proposal.type` 直接交给 Writer，等于把拒绝推迟到用户点「接受」之后，且那时只会得到账本 schema 的笼统 `invalid`。
+- 实现：`host/runtime-store.js` 的 `addProposal` 只在 `action === 'add'` 且给出 `type` 时做映射；映射失败抛 `invalid-type`，提案不写入。`update`/`merge`/`retract` 不改目标记忆的类型，随附的 `type` 记为 `null` 而不是报错，避免把「我想改这句话」误判成类型错误。`memory_propose` 已把 `error.code` 原样返回，所以工具侧自动得到 `{ ok: false, error: 'invalid-type' }`，无需改工具。
+- 测试：`proposals.test` 扩断言（`instruction` → `constraint`；`gossip` 的 add 被拒且列表中不存在；update 带 `gossip` 仍可建立且 `type` 为 `null`）；工具测试用真实 `createRuntimeStore` 证明 `memory_propose` 返回 `invalid-type`。`proposals` + `http-app` 37/37 通过。
+- 未验证：真实运行时提案文件里是否已有旧的非法类型 `add` 提案（若有，接受时仍由 Writer 的 schema 拒绝，提案保持 open；本轮不迁移历史文件）。

@@ -49,6 +49,15 @@ test('a proposal without evidence, content or target is refused', async () => {
     assert.equal(await code({ action: 'add', sourceRef: REF }), 'empty');
     const added = await store.addProposal({ action: 'add', content: '新记忆', type: 'fact', sourceRef: REF });
     assert.equal(added.target_memory_id, null);
+    assert.equal(added.type, 'fact');
+
+    const instruction = await store.addProposal({ action: 'add', content: '回答用中文', type: 'instruction', sourceRef: REF });
+    assert.equal(instruction.type, 'constraint', 'the rule kind is stored as the ledger type');
+    assert.equal(await code({ action: 'add', content: '一条来路不明的提案', type: 'gossip', sourceRef: REF }), 'invalid-type');
+    assert.equal((await store.listProposals()).some((entry) => entry.type === 'gossip'), false);
+
+    const update = await store.addProposal({ action: 'update', targetMemoryId: 'M-1', content: '改一句', type: 'gossip', sourceRef: REF });
+    assert.equal(update.type, null, 'an update keeps the target type, so a bad type is not stored');
   });
 });
 
@@ -117,4 +126,10 @@ test('the tool refuses without a turn, without evidence, or with a bad action', 
     currentTurn: () => ({ sessionId: 's1', turn: 3 }),
   });
   assert.deepEqual(await badAction.execute({ action: 'write', content: 'x' }), { ok: false, error: 'invalid-action' });
+
+  const badType = createProposeTool({
+    getApp: async () => ({ evidence: { async resolve() { return REF; } }, runtime: createRuntimeStore({ root: await mkdtemp(join(tmpdir(), 'dsh-memory-propose-type-')) }) }),
+    currentTurn: () => ({ sessionId: 's1', turn: 3 }),
+  });
+  assert.deepEqual(await badType.execute({ action: 'add', content: '一条来路不明的提案', type: 'gossip' }), { ok: false, error: 'invalid-type' });
 });
