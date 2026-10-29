@@ -378,6 +378,30 @@ test('the host client reads state and normalises a partial answer', async () => 
   assert.deepEqual(await partial.state(), { head: null, memories: [] });
 });
 
+test('the host client learns the write token from state and presents it on every write', async () => {
+  const plugin = await loadPlugin();
+  const posts = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    if (url.endsWith('/state')) return response({ json: { ok: true, head: 'abc', memories: [], writeToken: 'token-from-state' } });
+    posts.push({ url, headers: init.headers });
+    return response({ json: { ok: true, status: 'applied', change_id: 'c-2' } });
+  });
+  await client.state();
+  await client.update({ memoryId: 'M-1', content: 'x', expectedBaseChangeId: 'c-1' });
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].headers['x-dsh-memory-token'], 'token-from-state');
+
+  // Each panel action builds a fresh client, so the token learned on mount must
+  // outlive one client; otherwise every click would post unauthenticated.
+  const later = [];
+  const next = plugin.createHostClient(async (url, init) => {
+    later.push({ url, headers: init.headers });
+    return response({ json: { ok: true, status: 'applied' } });
+  });
+  await next.retract({ memoryId: 'M-1', expectedBaseChangeId: 'c-1' });
+  assert.equal(later[0].headers['x-dsh-memory-token'], 'token-from-state');
+});
+
 test('the host client names every way the Host can be unreachable', async () => {
   const plugin = await loadPlugin();
   const reasons = [

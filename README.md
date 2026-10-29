@@ -7,7 +7,7 @@
 ## 它做什么
 
 - 从已完成的用户原话里提出候选（默认靠中文规则，精度优先）
-- 用户在「记忆」面板里接受、编辑、撤回、标记有误
+- 用户在「记忆」面板里接受、编辑、撤回、标记有误；写账本要带页面从 `/state` 拿到的令牌
 - 正式记忆写入 `~/.dsh/dsh-memory/ledger`，一条变更一次 Git 提交
 - 在 `agent/pre-step` 刷新快照，经 `systemPrompt.context` 注入相关记忆
 - 模型可搜索记忆、可提出修改，但不能批准自己的提案
@@ -96,7 +96,11 @@ flowchart LR
 
 ## HTTP
 
-Host 在回环地址注册 `/api/dsh-memory/*`。请求必须来自回环 socket，且 Host 头为回环地址，并拒绝跨站。读写共用这道围栏（`isTrustedWrite = isTrustedRead`）。
+Host 在回环地址注册 `/api/dsh-memory/*`。读、写都要求回环 socket、回环 Host，并拒绝跨站。
+
+写请求另外要带 `x-dsh-memory-token`，令牌由 `GET /state` 发给同源页面。跨站页面读不到 `/state` 响应体，自定义头会触发 Host 不放行的预检，所以不能替用户改账本。本机进程仍能读到令牌，它不是对抗本机恶意程序的凭据。
+
+正式写入（`/add` `/update` `/retract` `/review` `/migrate` 以及接受提案）在缺少 `sessionQuery` 时返回 `503 evidence-unavailable`，不再静默跳过证据校验。`/update`、`/retract` 和 merge 必须带非空 `expectedBaseChangeId`，否则 `400 missing-base`。
 
 常用路径：`/ping` `/state` `/history` `/changes` `/candidates` `/review` `/add` `/update` `/retract` `/objections` `/settings` `/proposals` `/injections` `/export` `/migrate`。
 
@@ -118,7 +122,7 @@ node --test packages/l0-conversation/test/*.js
 node packages/dsh-memory/eval/run-extraction-eval.mjs
 ```
 
-2026-10-29 只读审计时：插件 375 + 账本 32 + L0 7，共 414 项通过。之后若加了测试，以当时命令输出为准。
+阶段 1 安全边界验收时：插件约 400、账本 31、L0 7。只读审计基线（414）见 [phase0](docs/status/phase0-readonly-audit.md)。以当时 `node --test` 输出为准。
 
 ## 设计约束
 
@@ -132,13 +136,13 @@ node packages/dsh-memory/eval/run-extraction-eval.mjs
 
 ## 当前缺口
 
-- Client 仍可能与 localStorage 并行保存一份副本；评审应以 Host 账本为准，否则会分叉
+- Client 仍有一份 localStorage 副本，界面已标明「未进账本」；正式记忆以 Git 账本为准
 - 提取主要认中文显式说法（记住 / 决定 / 我更喜欢…）；英文和隐式偏好会漏
 - 正式记忆目前都是 `global` scope，没有 workspace 隔离
 - L2/L3 纯函数已有（`host/scenarios.js`、`host/persona.js`），界面尚未挂上
-- 写入门禁（统一批准、`writesEnabled`）仍是设计稿，见 [write-gate](docs/design/write-gate/)
+- `MemoryWriter` 的 gated ADD 已实现，默认 `writesEnabled: false`，生产 HTTP 仍走加固后的旧入口，尚未切到统一写入路径
 
-安全与测试基线见 [阶段 0 只读审计](docs/status/phase0-readonly-audit.md)。
+阶段 0 审计见 [phase0-readonly-audit.md](docs/status/phase0-readonly-audit.md)。阶段 1 写围栏、证据闸门、抑制 fail-closed 的修复与活体验收见 [phase1-security-boundary-report.md](docs/status/phase1-security-boundary-report.md) 和 [phase1-acceptance-report.md](docs/status/phase1-acceptance-report.md)。
 
 ## 文档
 
@@ -148,7 +152,7 @@ node packages/dsh-memory/eval/run-extraction-eval.mjs
 |---|---|---|
 | [docs/investigation/](docs/investigation/) | 宿主调查 | [原生插件调查](docs/investigation/dsh-native-memory-plugin-investigation.md) |
 | [docs/design/](docs/design/) | 目标架构 | [v2.1 路线图](docs/design/dsh-memory-roadmap-v2.md) |
-| [docs/status/](docs/status/) | 实现与审计 | [进度](docs/status/dsh-memory-v2-progress.md) · [审计](docs/status/phase0-readonly-audit.md) |
+| [docs/status/](docs/status/) | 实现与审计 | [进度](docs/status/dsh-memory-v2-progress.md) · [阶段 0](docs/status/phase0-readonly-audit.md) · [阶段 1](docs/status/phase1-security-boundary-report.md) |
 | [docs/ops/](docs/ops/) | 本机验收 | [隔离验收](docs/ops/dsh-memory-phase4-acceptance.md) |
 
 `docs/status/dsh-memory-plugin-report.md` 是 2026-10-28 的快照，内容已过时。

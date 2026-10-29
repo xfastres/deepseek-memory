@@ -38,6 +38,8 @@
 | [dsh-memory-v2-progress.md](status/dsh-memory-v2-progress.md) | 按迭代记录的已验证进度 |
 | [dsh-memory-v2-status.md](status/dsh-memory-v2-status.md) | 交接用状态页（测试计数可能过期，以实际 `node --test` 为准） |
 | [phase0-readonly-audit.md](status/phase0-readonly-audit.md) | 2026-10-29 只读审计（414 项测试基线） |
+| [phase1-security-boundary-report.md](status/phase1-security-boundary-report.md) | 阶段 1：写令牌、证据闸门、抑制 fail-closed |
+| [phase1-acceptance-report.md](status/phase1-acceptance-report.md) | 阶段 1 在真实 DSH 上的端到端验收 |
 | [dsh-memory-plugin-report.md](status/dsh-memory-plugin-report.md) | 2026-10-28 插件快照，**已过时**（仍写 Host 为空） |
 
 ## ops — 运维与验收

@@ -14,6 +14,7 @@
 // Recording an objection is all this does: it suppresses the memory at once
 // (D7) and is not a ledger write. Editing or retracting stays a user decision.
 
+import { normalizeCorrectionKind } from './corrections.js';
 import { scoreMemory } from './retrieval.js';
 import { narrowingRequest } from './narrowing.js';
 
@@ -110,19 +111,22 @@ export function evaluateCorrection({ text, memories, suppressedIds = [] } = {}) 
 export async function applyCorrection({ text, memories, suppressedIds, runtime }) {
   const decision = evaluateCorrection({ text, memories, suppressedIds });
   if (!decision.act) return { recorded: false, ...decision };
+  // Cue patterns may speak in synonyms; the runtime vocabulary does not.
+  const kind = normalizeCorrectionKind(decision.kind);
+  const normalized = { ...decision, kind };
   if (runtime === null || runtime === undefined || typeof runtime.addObjection !== 'function') {
-    return { recorded: false, ...decision, reason: 'runtime-unavailable' };
+    return { recorded: false, ...normalized, reason: 'runtime-unavailable' };
   }
   try {
-    const objection = await runtime.addObjection({ memoryId: decision.memoryId, kind: decision.kind, reason: decision.reason });
+    const objection = await runtime.addObjection({ memoryId: normalized.memoryId, kind, reason: normalized.reason });
     // Both correction entries must say the same thing about a review objection:
     // it is recorded, and no replacement wording exists yet (§6.6).
     const memory = (Array.isArray(memories) ? memories : [])
-      .find((row) => row !== null && typeof row === 'object' && row.id === decision.memoryId) ?? null;
-    return { recorded: true, ...decision, objection, narrowing: narrowingRequest({ objection, memory }) };
+      .find((row) => row !== null && typeof row === 'object' && row.id === normalized.memoryId) ?? null;
+    return { recorded: true, ...normalized, objection, narrowing: narrowingRequest({ objection, memory }) };
   } catch (error) {
     const code = String((error && error.code) || 'failed');
     // An existing objection is the same outcome: the memory is already hidden.
-    return { recorded: false, ...decision, reason: code === 'duplicate' ? 'already-objected' : `failed:${code}` };
+    return { recorded: false, ...normalized, reason: code === 'duplicate' ? 'already-objected' : `failed:${code}` };
   }
 }

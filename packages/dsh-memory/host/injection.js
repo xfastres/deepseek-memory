@@ -117,13 +117,32 @@ export function createInjectionRuntime(options = {}) {
     const state = await service.state();
     // An objection suppresses a memory before retrieval ever sees it (D7):
     // the filter runs here, not inside scoring, so no scorer can forget it.
+    // A failed suppression read must not fail open: keep the last filtered
+    // snapshot when one exists, otherwise inject nothing until suppression is
+    // readable again. Re-injecting an objected memory after the user already
+    // objected is worse than a temporarily empty block.
     let suppressed = [];
     if (typeof service.suppressed === 'function') {
       try {
         const ids = await service.suppressed();
         suppressed = Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
       } catch {
-        suppressed = [];
+        if (snapshot.at !== null) {
+          snapshot = {
+            ...snapshot,
+            at: now().toISOString(),
+            degraded: 'suppression-unavailable',
+          };
+          return snapshot;
+        }
+        snapshot = {
+          at: now().toISOString(),
+          head: typeof state.head === 'string' ? state.head : null,
+          memories: [],
+          suppressed: 0,
+          degraded: 'suppression-unavailable',
+        };
+        return snapshot;
       }
     }
     const memories = Array.isArray(state.memories) ? state.memories : [];

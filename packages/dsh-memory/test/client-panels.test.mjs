@@ -394,6 +394,8 @@ test('the local store is labelled as unledgered and stays migratable', async () 
   const { plugin, t } = await load();
   assert.match(t('localCandidates'), /未进 Git 账本/u);
   assert.match(t('localCandidates'), /导入到记忆库/u);
+  assert.match(t('formal').replace('{count}', '2'), /浏览器本地副本（未进账本）/u);
+  assert.match(t('localFormalHint'), /正式记忆以记忆库/u);
   assert.match(t('migrateButton').replace('{count}', '3'), /3 项/u);
   // Migration reports remain honest about refusals: reasons are counted, not hidden.
   const summary = plugin.migrationSummary({ applied: 2, replayed: 1, failed: 0, skipped: [{ reason: 'no-evidence' }, { reason: 'no-evidence' }, { reason: 'duplicate' }] }, t);

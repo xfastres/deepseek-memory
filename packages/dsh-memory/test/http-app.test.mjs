@@ -36,14 +36,36 @@ function makeResponse() {
   };
 }
 
-async function call(app, path, options) {
+async function call(app, path, options = {}) {
   const res = makeResponse();
   const [routePath, query] = path.split('?');
-  const req = makeRequest(options);
+  const method = options.method || 'GET';
+  let headers = options.headers;
+  // Behavioural tests should not have to remember the write token; they still
+  // opt out with unauth:true (the fence tests) or by sending a token themselves.
+  if (method === 'POST' && options.unauth !== true && app && typeof app.writeToken === 'string') {
+    const existing = headers || {};
+    if (existing['x-dsh-memory-token'] === undefined) {
+      headers = { ...existing, 'x-dsh-memory-token': app.writeToken };
+    }
+  }
+  const req = makeRequest({ ...options, headers });
   // Handlers read the query from req.url; the route table is keyed by path only.
   if (query !== undefined) req.url = path;
   await app.routes[routePath](req, res);
   return { status: res.captured.status, json: res.captured.body === '' ? null : JSON.parse(res.captured.body) };
+}
+
+async function writeHeaders(app, extra = {}) {
+  const state = await call(app, '/api/dsh-memory/state');
+  assert.equal(state.status, 200);
+  assert.equal(typeof state.json.writeToken, 'string');
+  return {
+    ...BROWSER,
+    ...JSON_HEADERS,
+    'x-dsh-memory-token': state.json.writeToken,
+    ...extra,
+  };
 }
 
 async function withApp(run) {
@@ -55,9 +77,14 @@ async function withApp(run) {
   }
 }
 
+/** Existing behavioural tests opt into unverified writes; security tests do not. */
+function testApp(dir, options = {}) {
+  return createMemoryApp({ dataDir: dir, allowUnverified: true, ...options });
+}
+
 test('state answers an empty ledger and refuses untrusted callers', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const state = await call(app, '/api/dsh-memory/state');
     assert.equal(state.status, 200);
     assert.equal(state.json.ok, true);
@@ -69,15 +96,15 @@ test('state answers an empty ledger and refuses untrusted callers', async () => 
   });
 });
 
-test('the write fence matches the shipped task board: loopback and host, not a browser marker', async () => {
+test('the write fence still refuses cross-site callers, and requires the session write token', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
-    // A local client with no Origin and no Sec-Fetch-Site still reaches the
-    // handler, exactly like the task board's ledger. Evidence is what decides.
+    const app = testApp(dir);
+    // Loopback alone is no longer enough: a write needs the token from /state.
     const bare = await call(app, '/api/dsh-memory/add', {
-      method: 'POST', headers: JSON_HEADERS, body: { content: 'x', sourceRef: { session_id: 's', event_seq: 1 } },
+      method: 'POST', unauth: true, headers: JSON_HEADERS, body: { content: 'x', sourceRef: { session_id: 's', event_seq: 1 } },
     });
-    assert.equal(bare.status, 200);
+    assert.equal(bare.status, 401);
+    assert.equal(bare.json.error, 'unauthorized');
 
     // A cross-site request is still refused before anything is written.
     const crossSite = await call(app, '/api/dsh-memory/add', {
@@ -93,6 +120,12 @@ test('the write fence matches the shipped task board: loopback and host, not a b
     });
     assert.equal(foreignHost.status, 403);
 
+    const headers = await writeHeaders(app);
+    const ok = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers, body: { content: 'x', sourceRef: { session_id: 's', event_seq: 1 } },
+    });
+    assert.equal(ok.status, 200);
+
     const state = await call(app, '/api/dsh-memory/state');
     assert.equal(state.json.memories.length, 1, 'only the accepted write landed');
   });
@@ -100,7 +133,7 @@ test('the write fence matches the shipped task board: loopback and host, not a b
 
 test('a mutation needs JSON and evidence', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const noJson = await call(app, '/api/dsh-memory/add', { method: 'POST', headers: BROWSER, body: { content: 'x' } });
     assert.equal(noJson.status, 415);
 
@@ -114,7 +147,7 @@ test('a mutation needs JSON and evidence', async () => {
 
 test('adding with an explicit source ref commits and shows up in state', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const added = await call(app, '/api/dsh-memory/add', {
       method: 'POST',
       headers: { ...BROWSER, ...JSON_HEADERS },
@@ -138,9 +171,7 @@ test('adding with an explicit source ref commits and shows up in state', async (
 
 test('a turn is turned into a real event seq through sessionQuery', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -158,7 +189,7 @@ test('a turn is turned into a real event seq through sessionQuery', async () => 
 
 test('a stale edit is refused with 409 and an unknown memory with 404', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const created = await call(app, '/api/dsh-memory/add', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
       body: { content: '第一版', sourceRef: { session_id: 's1', event_seq: 2 } },
@@ -180,7 +211,9 @@ test('a stale edit is refused with 409 and an unknown memory with 404', async ()
 
     const missing = await call(app, '/api/dsh-memory/update', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
-      body: { memoryId: 'M-19990101-nope', content: 'x' },
+      // A baseline is required before the memory is looked up, so the lookup
+      // failure is what 404 reports; the baseline must not mask it.
+      body: { memoryId: 'M-19990101-nope', content: 'x', expectedBaseChangeId: memory.last_change_id },
     });
     assert.equal(missing.status, 404);
     assert.equal(missing.json.error, 'missing');
@@ -189,9 +222,7 @@ test('a stale edit is refused with 409 and an unknown memory with 404', async ()
 
 test('migration imports what it can prove and reports what it cannot', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -241,9 +272,7 @@ test('migration imports what it can prove and reports what it cannot', async () 
 
 test('a candidate is queued, then accepted into the ledger with its own evidence', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -281,7 +310,7 @@ test('a candidate is queued, then accepted into the ledger with its own evidence
 
 test('review refuses what it cannot do instead of guessing', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
 
     const noEvidence = await call(app, '/api/dsh-memory/candidate', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: { text: '没有证据' },
@@ -324,9 +353,7 @@ test('review refuses what it cannot do instead of guessing', async () => {
 
 test('an unreadable session is a refusal, not an internal error', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { throw new Error('no such session'); },
         async readEvent() { throw new Error('no such session'); },
       },
@@ -347,7 +374,7 @@ test('an unreadable session is a refusal, not an internal error', async () => {
 
 test('invalid bodies, wrong methods and retraction behave', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const badJson = await call(app, '/api/dsh-memory/add', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS }, body: '{not json',
     });
@@ -379,7 +406,7 @@ test('invalid bodies, wrong methods and retraction behave', async () => {
 
 test('history returns the version timeline oldest first and refuses the rest', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const added = await call(app, '/api/dsh-memory/add', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
       body: { content: '先记住这条约定', type: 'fact', sourceRef: { session_id: 's1', event_seq: 2 } },
@@ -425,7 +452,7 @@ test('history returns the version timeline oldest first and refuses the rest', a
 
 test('changes lists recent ledger commits newest first and validates its limit', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const empty = await call(app, '/api/dsh-memory/changes');
     assert.equal(empty.status, 200);
     assert.equal(empty.json.ok, true);
@@ -464,9 +491,7 @@ test('changes lists recent ledger commits newest first and validates its limit',
 
 test('the queue says whether a candidate is new, identical or conflicting', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -515,9 +540,7 @@ test('the queue says whether a candidate is new, identical or conflicting', asyn
 
 test('an extracted instruction is stored and accepted as a constraint', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -544,9 +567,7 @@ test('an extracted instruction is stored and accepted as a constraint', async ()
 
 test('a candidate the ledger cannot store is refused at the queue, not later', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -567,9 +588,7 @@ test('a candidate the ledger cannot store is refused at the queue, not later', a
 
 test('an objection suppresses a memory without touching the ledger', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -621,9 +640,7 @@ test('an objection suppresses a memory without touching the ledger', async () =>
 
 test('the objection routes speak the correction vocabulary', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -658,7 +675,7 @@ test('the objection routes speak the correction vocabulary', async () => {
 
 test('the settings route reports, changes and validates the automatic-memory switches', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const initial = await call(app, '/api/dsh-memory/settings');
     assert.equal(initial.status, 200);
     assert.equal(initial.json.settings.enabled, true, 'extraction is on by default');
@@ -712,9 +729,7 @@ test('the settings route reports, changes and validates the automatic-memory swi
 
 test('the candidate policy follows the switches the user saved', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -749,9 +764,7 @@ test('the candidate policy follows the switches the user saved', async () => {
 
 test('the queue carries the §7.2 status and whether it still needs a decision', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -788,9 +801,7 @@ async function addMemory(app, content) {
 
 test('a proposal is listed, and only the user can accept it', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -836,9 +847,7 @@ test('a proposal is listed, and only the user can accept it', async () => {
 
 test('a rejected proposal touches nothing, and retract proposals go through the writer', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -892,7 +901,7 @@ test('a rejected proposal touches nothing, and retract proposals go through the 
 
 test('every advertised route name has a handler, so a name can never be a promise', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const missing = APP_ROUTE_NAMES.filter((name) => typeof app.routes[`${API_PREFIX}/${name}`] !== 'function');
     assert.deepEqual(missing, [], 'a name without a handler would be a silent 404');
   });
@@ -900,9 +909,7 @@ test('every advertised route name has a handler, so a name can never be a promis
 
 test('a write whose evidence cannot be found in the log is refused, not stored', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return [{ seq: 1, type: 'turn/start' }, { seq: 2, type: 'user/message' }, { seq: 3, type: 'turn/end' }]; },
         async readEvent({ seq }) { return { target: { seq, type: seq === 2 ? 'user/message' : 'turn/start', data: { turn: 1, content: [{ type: 'text', text: '记住 pnpm' }] } } }; },
       },
@@ -926,9 +933,7 @@ test('a write whose evidence cannot be found in the log is refused, not stored',
 
 test('objections tell the reader which memories are waiting for a review', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1 } } }; },
       },
@@ -951,7 +956,7 @@ test('objections tell the reader which memories are waiting for a review', async
 
 test('a verdict objection is not treated as a narrowing request', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const memory = await addMemory(app, '项目使用 pnpm');
     const wrong = await call(app, '/api/dsh-memory/objections', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
@@ -965,7 +970,7 @@ test('a verdict objection is not treated as a narrowing request', async () => {
 
 test('a corrected wording ends the objection it answers, in the same write', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const memory = await addMemory(app, '项目使用 pnpm');
     await call(app, '/api/dsh-memory/objections', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
@@ -1006,9 +1011,7 @@ test('a corrected wording ends the objection it answers, in the same write', asy
 
 test('the add route carries tags and entities, and refuses a malformed list', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({
-      dataDir: dir,
-      sessionQuery: {
+    const app = testApp(dir, {sessionQuery: {
         async listEvents() { return LOG; },
         async readEvent({ seq }) { return { target: { seq, data: { turn: 1, content: [{ type: 'text', text: '我们决定用 pnpm' }] } } }; },
       },
@@ -1044,7 +1047,7 @@ test('the add route carries tags and entities, and refuses a malformed list', as
 
 test('an accepted candidate writes the entities it inherited', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const ref = { session_id: 's1', event_seq: 2, event_type: 'user/message' };
     const created = await call(app, '/api/dsh-memory/candidate', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },
@@ -1067,7 +1070,7 @@ test('an accepted candidate writes the entities it inherited', async () => {
 
 test('the changes route answers with before and after for each change', async () => {
   await withApp(async (dir) => {
-    const app = createMemoryApp({ dataDir: dir });
+    const app = testApp(dir);
     const memory = await addMemory(app, '项目使用 pnpm');
     const updated = await call(app, '/api/dsh-memory/update', {
       method: 'POST', headers: { ...BROWSER, ...JSON_HEADERS },

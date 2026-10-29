@@ -8,6 +8,7 @@
 // them. The page keeps its local store until switching over is verified, so a
 // wrong route here costs a 404, not lost memories.
 
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
 import { classifyCandidates } from './classification.js';
@@ -24,6 +25,7 @@ import { createRuntimeStore } from './runtime-store.js';
 import { createEvidenceResolver } from './session-evidence.js';
 
 export const API_PREFIX = '/api/dsh-memory';
+export const WRITE_TOKEN_HEADER = 'x-dsh-memory-token';
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -109,19 +111,29 @@ function requiresJson(req) {
  * @param {string} options.dataDir absolute plugin data directory
  * @param {object} [options.sessionQuery] Host session query service, for evidence
  * @param {() => Date} [options.now]
+ * @param {boolean} [options.allowUnverified] test-only: permit ledger writes when
+ *   sessionQuery is missing. Production always leaves this false.
+ * @param {string} [options.writeToken] test-only override for the write token
  */
 export function createMemoryApp(options = {}) {
-  const { dataDir, sessionQuery, now } = options;
+  const { dataDir, sessionQuery, now, allowUnverified = false, writeToken: writeTokenOption } = options;
   if (typeof dataDir !== 'string' || dataDir === '') throw new Error('dataDir is required');
+  const writeToken = typeof writeTokenOption === 'string' && writeTokenOption !== ''
+    ? writeTokenOption
+    : randomBytes(32).toString('hex');
   const runtime = createRuntimeStore({ root: join(dataDir, 'runtime'), now });
   const evidence = sessionQuery && typeof sessionQuery.listEvents === 'function'
     ? createEvidenceResolver({ sessionQuery })
     : null;
+  // Formal writes need a live evidence verifier. Missing sessionQuery used to
+  // silently skip verification (fail-open). That is now refused unless a test
+  // explicitly opts into allowUnverified.
+  const evidenceRequired = allowUnverified !== true;
   // Every ledger write re-checks its refs against the Session log (roadmap 5.1):
   // the resolver proves a turn at write time, and the verifier refuses a ref
   // whose event is gone, changed type, or no longer hashes to the recorded
   // quote. Without a session service there is nothing to check against, so the
-  // resolver stays the only guard.
+  // resolver stays the only guard — and when evidence is required, writes stop.
   const service = createLedgerService({
     root: join(dataDir, 'ledger'),
     now,
@@ -149,6 +161,46 @@ export function createMemoryApp(options = {}) {
   }
 
   /**
+   * Loopback fence plus the write token published by /state.
+   *
+   * The token is not a secret from a local process — /state is already readable
+   * on loopback — it is what a hostile page cannot obtain: a cross-origin fetch
+   * may not read /state's body, and attaching this custom header forces a
+   * preflight the Host never approves. So a page the user happens to visit
+   * cannot drive a formal write from their own browser.
+   */
+  function authorizeWrite(req, res) {
+    if (!isTrustedWrite(req)) {
+      writeJson(res, 403, { ok: false, error: 'forbidden' });
+      return false;
+    }
+    const headers = req.headers || {};
+    const presented = headers[WRITE_TOKEN_HEADER];
+    if (typeof presented !== 'string' || presented === '' || presented !== writeToken) {
+      writeJson(res, 401, { ok: false, error: 'unauthorized' });
+      return false;
+    }
+    return true;
+  }
+
+  /** Formal ledger writes need a live evidence verifier unless a test opts out. */
+  function ensureEvidenceAvailable(res) {
+    if (evidenceRequired && evidence === null) {
+      writeJson(res, 503, { ok: false, error: 'evidence-unavailable' });
+      return false;
+    }
+    return true;
+  }
+
+  function requireBaseChangeId(value, res) {
+    if (typeof value !== 'string' || value.trim() === '') {
+      writeJson(res, 400, { ok: false, error: 'missing-base' });
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Resolve evidence without letting a service failure become a 500.
    *
    * A session that does not exist makes `sessionQuery` throw, and that is a
@@ -171,7 +223,7 @@ export function createMemoryApp(options = {}) {
       if (!isTrustedRead(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
       try {
         const state = await service.state();
-        writeJson(res, 200, { ok: true, ...state });
+        writeJson(res, 200, { ok: true, writeToken, ...state });
       } catch (error) {
         fail(res, error);
       }
@@ -260,8 +312,9 @@ export function createMemoryApp(options = {}) {
 
     [`${API_PREFIX}/add`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      if (!ensureEvidenceAvailable(res)) return;
       try {
         const body = await readJsonBody(req);
         const content = typeof body.content === 'string' ? body.content.trim() : '';
@@ -294,17 +347,19 @@ export function createMemoryApp(options = {}) {
 
     [`${API_PREFIX}/update`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      if (!ensureEvidenceAvailable(res)) return;
       try {
         const body = await readJsonBody(req);
         const content = typeof body.content === 'string' ? body.content.trim() : '';
         if (typeof body.memoryId !== 'string' || body.memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
         if (content === '') { writeJson(res, 400, { ok: false, error: 'empty' }); return; }
+        if (!requireBaseChangeId(body.expectedBaseChangeId, res)) return;
         const result = await service.update({
           memoryId: body.memoryId,
           content,
-          expectedBaseChangeId: typeof body.expectedBaseChangeId === 'string' ? body.expectedBaseChangeId : null,
+          expectedBaseChangeId: body.expectedBaseChangeId,
           tags: body.tags,
           entities: body.entities,
         });
@@ -328,14 +383,16 @@ export function createMemoryApp(options = {}) {
 
     [`${API_PREFIX}/retract`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      if (!ensureEvidenceAvailable(res)) return;
       try {
         const body = await readJsonBody(req);
         if (typeof body.memoryId !== 'string' || body.memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
+        if (!requireBaseChangeId(body.expectedBaseChangeId, res)) return;
         const result = await service.retract({
           memoryId: body.memoryId,
-          expectedBaseChangeId: typeof body.expectedBaseChangeId === 'string' ? body.expectedBaseChangeId : null,
+          expectedBaseChangeId: body.expectedBaseChangeId,
           reason: typeof body.reason === 'string' ? body.reason : undefined,
         });
         writeJson(res, 200, { ok: true, ...result });
@@ -368,7 +425,7 @@ export function createMemoryApp(options = {}) {
 
     [`${API_PREFIX}/candidate`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
@@ -401,7 +458,7 @@ export function createMemoryApp(options = {}) {
 
     [`${API_PREFIX}/review`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
@@ -418,6 +475,7 @@ export function createMemoryApp(options = {}) {
           return;
         }
         if (body.action === 'accept') {
+          if (!ensureEvidenceAvailable(res)) return;
           const content = typeof body.content === 'string' && body.content.trim() !== '' ? body.content.trim() : candidate.text;
           // Older candidates may still carry a rule kind the ledger does not
           // know; refusing here beats returning an opaque schema error.
@@ -439,13 +497,15 @@ export function createMemoryApp(options = {}) {
           return;
         }
         if (body.action === 'merge') {
+          if (!ensureEvidenceAvailable(res)) return;
           const content = typeof body.content === 'string' ? body.content.trim() : '';
           if (typeof body.targetId !== 'string' || body.targetId === '') { writeJson(res, 400, { ok: false, error: 'missing-target' }); return; }
           if (content === '') { writeJson(res, 400, { ok: false, error: 'empty' }); return; }
+          if (!requireBaseChangeId(body.expectedBaseChangeId, res)) return;
           const result = await service.update({
             memoryId: body.targetId,
             content,
-            expectedBaseChangeId: typeof body.expectedBaseChangeId === 'string' ? body.expectedBaseChangeId : null,
+            expectedBaseChangeId: body.expectedBaseChangeId,
           });
           const reviewed = await runtime.setCandidateStatus(candidate.id, 'accepted_by_user', { memoryId: body.targetId, content });
           writeJson(res, 200, { ok: true, memory: result.memory, candidate: reviewed });
@@ -481,7 +541,7 @@ export function createMemoryApp(options = {}) {
         return;
       }
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
@@ -503,7 +563,7 @@ export function createMemoryApp(options = {}) {
 
     [`${API_PREFIX}/objections/clear`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
@@ -528,7 +588,7 @@ export function createMemoryApp(options = {}) {
         return;
       }
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
@@ -562,7 +622,7 @@ export function createMemoryApp(options = {}) {
         return;
       }
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
@@ -580,6 +640,7 @@ export function createMemoryApp(options = {}) {
           return;
         }
         if (body.action !== 'accept') { writeJson(res, 400, { ok: false, error: 'unknown-action' }); return; }
+        if (!ensureEvidenceAvailable(res)) return;
 
         const expected = typeof body.expectedBaseChangeId === 'string' && body.expectedBaseChangeId !== ''
           ? body.expectedBaseChangeId
@@ -613,8 +674,9 @@ export function createMemoryApp(options = {}) {
 
     [`${API_PREFIX}/migrate`]: async (req, res) => {
       if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
-      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      if (!authorizeWrite(req, res)) return;
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      if (!ensureEvidenceAvailable(res)) return;
       try {
         const body = await readJsonBody(req);
         const legacyMemories = Array.isArray(body.memories) ? body.memories : [];
@@ -675,7 +737,7 @@ export function createMemoryApp(options = {}) {
     return { candidates: { imported: imported.length, skipped } };
   }
 
-  return { routes, service, runtime, evidence, settings: () => loadSettings(dataDir).settings };
+  return { routes, service, runtime, evidence, writeToken, settings: () => loadSettings(dataDir).settings };
 }
 
 /** Turn the handler table into the exact WebRoute list the web server wants. */

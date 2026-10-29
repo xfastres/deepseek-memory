@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { LedgerLockError, RepoLock } from '../../provider-git-ledger/src/lock.js';
 import { toLedgerType } from './memory-types.js';
-import { isCorrectionKind, isReviewOnlyKind } from './corrections.js';
+import { isCorrectionKind, isReviewOnlyKind, normalizeCorrectionKind } from './corrections.js';
 
 export const RUNTIME_FILE = 'runtime.json';
 export const RUNTIME_VERSION = 1;
@@ -262,9 +262,13 @@ export function createRuntimeStore(options = {}) {
     async addObjection(input = {}) {
       const memoryId = typeof input.memoryId === 'string' ? input.memoryId.trim() : '';
       if (memoryId === '') throw new RuntimeStoreError('objection needs a memory id', 'empty');
-      // The kind is the machine-readable reason; an unknown one is refused
+      // Cue synonyms (`incorrect`, `delete_request`) normalize onto the shared
+      // vocabulary before the kind is checked. An unknown kind is still refused
       // rather than defaulted, so "wrong" is never invented on the user's behalf.
-      if (input.kind !== undefined && input.kind !== null && !isCorrectionKind(input.kind)) {
+      const kind = input.kind === undefined || input.kind === null
+        ? null
+        : normalizeCorrectionKind(input.kind);
+      if (kind !== null && !isCorrectionKind(kind)) {
         throw new RuntimeStoreError(`unknown correction kind: ${String(input.kind)}`, 'invalid-kind');
       }
       return mutate((document) => {
@@ -273,7 +277,7 @@ export function createRuntimeStore(options = {}) {
         const objection = {
           id: objectionId(now()),
           memory_id: memoryId,
-          kind: isCorrectionKind(input.kind) ? input.kind : null,
+          kind: isCorrectionKind(kind) ? kind : null,
           reason: typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : '',
           status: 'active',
           created_at: now().toISOString(),

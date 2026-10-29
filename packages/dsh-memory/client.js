@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
       exportJson: '导出', importJson: '导入',
       importFailed: '导入失败：文件格式不正确。', imported: '已导入 {memories} 条正式记忆、{candidates} 条候选。',
       nothingToExport: '还没有可导出的记忆。',
-      rejected: '已拒绝', formal: '正式记忆（{count}）', before: '变更前', after: '变更后',
+      rejected: '已拒绝', formal: '浏览器本地副本（未进账本）（{count}）', localFormalHint: '仅保存在本机浏览器；正式记忆以记忆库（Git 账本）为准。', before: '变更前', after: '变更后',
       ADD: '新增', UPDATE: '更新', NO_CHANGE: '无变化', REVIEW: '需要复核', stale: '正式记忆已变化，请重新比较。',
       saveFailed: '操作未完成，请重试。',
       edit: '编辑', saveEdit: '保存修改', history: '历史版本（{count}）', mergedContent: '合并后内容（可编辑）',
@@ -105,7 +105,7 @@ window.__ModuleLoader__.load({
       exportJson: 'Export', importJson: 'Import',
       importFailed: 'Import failed: the file format is not valid.', imported: 'Imported {memories} formal memories and {candidates} candidates.',
       nothingToExport: 'There is no memory to export yet.',
-      rejected: 'Rejected', formal: 'Formal memory ({count})', before: 'Before', after: 'After',
+      rejected: 'Rejected', formal: 'Browser-local copy (not in the ledger) ({count})', localFormalHint: 'Stored only in this browser; the memory store (Git ledger) is the formal authority.', before: 'Before', after: 'After',
       ADD: 'Add', UPDATE: 'Update', NO_CHANGE: 'No change', REVIEW: 'Needs review', stale: 'Formal memory changed. Compare again.',
       saveFailed: 'The action did not complete. Try again.',
       edit: 'Edit', saveEdit: 'Save changes', history: 'History ({count})', mergedContent: 'Merged content (editable)',
@@ -180,6 +180,9 @@ window.__ModuleLoader__.load({
     // escape a sub-path deployment. The shipped task board solves it the same
     // way (it drops the leading slash for exactly this reason).
     const HOST_PREFIX = 'api/dsh-memory';
+    // Write token published by the Host in /state. Kept in plugin scope so the
+    // short-lived clients built per click all share what the mount probe learned.
+    let hostWriteToken = null;
     const dayFormatter = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' });
     const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const dayKey = (milliseconds) => dayFormatter.format(new Date(milliseconds));
@@ -953,6 +956,14 @@ window.__ModuleLoader__.load({
 
     function createHostClient(fetchImpl, base) {
       const root = base || HOST_PREFIX;
+      // Shared by every client this plugin creates: each action builds a fresh
+      // client, so a per-client cache would lose the token between clicks.
+      function rememberWriteToken(data) {
+        if (data && typeof data.writeToken === 'string' && data.writeToken !== '') {
+          hostWriteToken = data.writeToken;
+        }
+        return data;
+      }
       async function readResponse(response) {
         if (response.status === 404) throw hostError('not-mounted');
         if (response.status === 403) throw hostError('forbidden');
@@ -977,16 +988,22 @@ window.__ModuleLoader__.load({
             headers: { accept: 'application/json' },
             signal: controller === null ? undefined : controller.signal,
           });
-          return await readResponse(response);
+          return rememberWriteToken(await readResponse(response));
         } finally {
           if (timer !== null) clearTimeout(timer);
         }
       }
       /** POST with JSON. Relative URL, so a sub-path deployment still works. */
       async function post(path, body) {
+        const headers = { accept: 'application/json', 'content-type': 'application/json' };
+        // The token is learned from /state, which the panel reads on mount and
+        // after every write, and is shared by all clients this plugin creates.
+        if (typeof hostWriteToken === 'string' && hostWriteToken !== '') {
+          headers['x-dsh-memory-token'] = hostWriteToken;
+        }
         const response = await fetchImpl(`${root}${path}`, {
           method: 'POST',
-          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          headers,
           body: JSON.stringify(body),
         });
         return readResponse(response);
@@ -1846,6 +1863,12 @@ window.__ModuleLoader__.load({
         if (!ledgerDraft || ledgerPending || typeof fetch !== 'function') return;
         const content = String(ledgerDraft.content ?? '').trim();
         if (content === '') { setLedgerDraft({ ...ledgerDraft, error: 'emptyContent' }); return; }
+        // The Host refuses a write without a baseline; say why instead of
+        // sending a request that can only fail.
+        if (typeof ledgerDraft.changeId !== 'string' || ledgerDraft.changeId === '') {
+          setLedgerDraft({ ...ledgerDraft, error: 'versionChanged' });
+          return;
+        }
         setLedgerPending(true);
         const answered = objections.reviewPending.includes(ledgerDraft.id);
         createHostClient(fetch).update({
@@ -1865,6 +1888,12 @@ window.__ModuleLoader__.load({
       };
       const retractLedger = (row) => {
         if (ledgerPending || typeof fetch !== 'function') return;
+        // Same rule as an edit: no baseline, no write.
+        if (typeof row.changeId !== 'string' || row.changeId === '') {
+          setRetractId(null);
+          setNotice(t('retractFailed').replace('{reason}', t('versionChanged')));
+          return;
+        }
         setLedgerPending(true);
         createHostClient(fetch).retract({ memoryId: row.id, expectedBaseChangeId: row.changeId }).then(() => {
           setLedgerPending(false);
@@ -2265,6 +2294,7 @@ window.__ModuleLoader__.load({
               shownMemories.length > 0
                 ? h('details', { className: 'dm-memory-bank' },
                   h('summary', null, t('formal').replace('{count}', shownMemories.length)),
+                  h('p', { className: 'dm-muted' }, t('localFormalHint')),
                   shownMemories.map((memory) => h(MemoryCard, {
                     key: `${memory.id}-${memory.version}`,
                     memory,

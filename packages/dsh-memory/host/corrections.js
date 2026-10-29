@@ -17,6 +17,16 @@ export const CORRECTION_KINDS = Object.freeze([
 ]);
 
 /**
+ * Natural-language cues may name a synonym (`incorrect`, `delete_request`).
+ * Persistence and the panel vocabulary stay on CORRECTION_KINDS, so every
+ * writer normalizes through this map before recording an objection.
+ */
+export const CORRECTION_KIND_ALIASES = Object.freeze({
+  incorrect: 'wrong',
+  delete_request: 'delete',
+});
+
+/**
  * Kinds that ask for a re-check rather than a stop (§6.3).
  *
  * "太宽泛" does not mean the memory is false, so the memory goes to
@@ -32,4 +42,13 @@ export function isReviewOnlyKind(value) {
 
 export function isCorrectionKind(value) {
   return typeof value === 'string' && CORRECTION_KINDS.includes(value);
+}
+
+/** Map a cue synonym onto the shared vocabulary, or leave a known kind alone. */
+export function normalizeCorrectionKind(value) {
+  if (typeof value !== 'string' || value === '') return value;
+  if (Object.prototype.hasOwnProperty.call(CORRECTION_KIND_ALIASES, value)) {
+    return CORRECTION_KIND_ALIASES[value];
+  }
+  return value;
 }

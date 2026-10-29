@@ -227,13 +227,28 @@ test('a service without a suppressed list keeps the old behaviour', async () => 
   assert.ok(runtime.buildText(undefined).text.includes('浅色'));
 });
 
-test('a failing suppressed lookup drops the filter instead of breaking the turn', async () => {
-  const memories = [memory('M-1', '项目使用 pnpm 管理依赖')];
+test('a failing suppressed lookup keeps the previous filter instead of failing open', async () => {
+  const memories = [
+    memory('M-1', '项目使用 pnpm 管理依赖'),
+    memory('M-2', '主题颜色用浅色'),
+  ];
+  let fail = false;
   const runtime = createInjectionRuntime({
-    service: { async state() { return { head: 'abc', memories }; }, async suppressed() { throw new Error('runtime unavailable'); } },
+    service: {
+      async state() { return { head: 'abc', memories }; },
+      async suppressed() {
+        if (fail) throw new Error('runtime unavailable');
+        return ['M-2'];
+      },
+    },
     now,
   });
   await runtime.refresh();
-  assert.equal(runtime.snapshot.memories.length, 1);
-  assert.ok(runtime.buildText(undefined).text.includes('pnpm'));
+  assert.deepEqual(runtime.snapshot.memories.map((entry) => entry.id), ['M-1']);
+
+  fail = true;
+  await runtime.refresh();
+  assert.deepEqual(runtime.snapshot.memories.map((entry) => entry.id), ['M-1']);
+  assert.equal(runtime.snapshot.degraded, 'suppression-unavailable');
+  assert.ok(!runtime.buildText(undefined).text.includes('浅色'));
 });
