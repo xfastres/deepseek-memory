@@ -106,6 +106,60 @@ Host 在回环地址注册 `/api/dsh-memory/*`。读、写都要求回环 socket
 
 契约见 [docs/design/dsh-memory-host-api.md](docs/design/dsh-memory-host-api.md)。个别字段可能落后于代码，以 `packages/dsh-memory/host/http-app.js` 为准。
 
+## 观察一条消息的流转
+
+两个只读脚本，用来回答「我发一句话，记忆到底做了什么、往 prompt 里注入了什么」。它们不写账本、不改状态，只读 Host 路由和本地文件，并直接复用 `host/retrieval.js` 的渲染逻辑，所以打印出来的注入原文与真正进入 prompt 的一字不差。
+
+### `scripts/memory-flow-trace.mjs` —— 按 14 步打印真实数据
+
+```powershell
+# 跟踪最近一轮
+node scripts/memory-flow-trace.mjs
+
+# 预演：指定一句话，走完整个流程
+node scripts/memory-flow-trace.mjs --query "记住：我习惯用 pwsh 而不是 bash"
+
+# 常驻，每轮新注入就重新追踪
+node scripts/memory-flow-trace.mjs --live
+
+# 看指定轮次 / 指定端口
+node scripts/memory-flow-trace.mjs --turn 8 --port 43337
+```
+
+每一步都打真实数据，而不是示意图：
+
+| 步 | 内容 |
+|---|---|
+| 1 | `agent/pre-step` 瀑布钩子签名 |
+| 2 | `observe()` 取到的原文、字数、scope 形状、观察路径 |
+| 3 | `extractCandidates()` 切句结果、每句是否被拒、候选的 rule/confidence |
+| 4 | `turnUserMessageSeq()` 账本里真实的 `source_refs`（seq、会话、引文哈希） |
+| 5 | `proposeForReview()` 候选队列真实条数、`enabled`/`autoAccept` |
+| 6 | `handleCorrection()` 异议条数与被屏蔽记忆 |
+| 7 | `ensureFresh()` 快照时间、TTL、快照记忆数 |
+| 8 | `refreshConstraints()` 配置加载状态、fallback、约束预算 |
+| 9 | `flushInjections()` 落盘结果、累计写入、calls/empty/records |
+| 10 | `ensureContext()` provider 是否注册、调用次数、`skipped` 原因 |
+| 11 | `buildText()` 查询切词、lookup 路径、每条的打分与排除原因 |
+| 12 | `formatInjection()` 最终注入原文方框 + 长度校验 |
+| 13 | prompt 发给模型、回复不进记忆的原因 |
+| 14 | 接受候选后的四道闸门与真实 `changes` 历史 |
+
+### `scripts/memory-flow-watch.mjs` —— 轻量监听
+
+只要「这一轮注入了哪几条、占多少预算、最终原文是什么」时用它：
+
+```powershell
+node scripts/memory-flow-watch.mjs          # 常驻监听
+node scripts/memory-flow-watch.mjs --once   # 只看最近一轮
+node scripts/memory-flow-watch.mjs --all    # 历史全打一遍
+node scripts/memory-flow-watch.mjs --query "你叫什么名字？"   # 预演
+```
+
+两个脚本都自动探测端口（`--port` 可指定），并在找不到 Host 时明确报错而不是静默失败。
+
+完整的数据流转说明见 [docs/message-flow.md](docs/message-flow.md)。
+
 ## 测试
 
 Windows 下不要把目录传给 `node --test`，按文件跑：
