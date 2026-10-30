@@ -114,11 +114,17 @@ Host 在回环地址注册 `/api/dsh-memory/*`。读、写都要求回环 socket
 
 一发消息就实时打印：消息进来 → 提取 → 候选 → 快照 → 注入 → 面板调用，每一步都带真实数据。
 
-需要先开埋点（**只在启动 DSH 的环境里设置，然后重启 DSH**）：
+**先开埋点**（用标记文件，开关不需要重启 DSH）：
 
 ```powershell
-$env:DSH_MEMORY_TRACE = '1'
+node scripts/memory-trace-switch.mjs        # 查看状态
+node scripts/memory-trace-switch.mjs --on   # 打开
+node scripts/memory-trace-switch.mjs --off  # 关闭
 ```
+
+标记文件是 `~/.dsh/dsh-memory/trace-on`：存在即开，删除即关，每个事件检查一次，所以运行中的 Host 也会立即响应。
+
+也可以用环境变量 `DSH_MEMORY_TRACE=1`（固定整个进程生命周期，需重启 DSH 才生效；显式设为 `0` 可否决标记文件）。优先级：显式参数 > 环境变量 > 标记文件。
 
 然后：
 

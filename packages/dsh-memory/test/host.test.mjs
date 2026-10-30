@@ -52,6 +52,7 @@ test('the Host half exposes the ping probe plus the memory routes', () => {
   const paths = routes.map((route) => route.path);
   assert.deepEqual(paths, [
     PING_PATH,
+    '/api/dsh-memory/trace/switch',
     '/api/dsh-memory/trace',
     '/api/dsh-memory/state',
     '/api/dsh-memory/history',
@@ -163,8 +164,8 @@ test('apply registers every route and the tool through the documented service ac
     effect: (fn) => { fn(); return () => {}; },
   };
   apply(ctx);
-  // APP_ROUTE_NAMES plus the ping probe and the trace stream.
-  assert.equal(registered.length, APP_ROUTE_NAMES.length + 2);
+  // APP_ROUTE_NAMES plus the ping probe, the trace stream and its switch.
+  assert.equal(registered.length, APP_ROUTE_NAMES.length + 3);
   assert.equal(registered[0].path, PING_PATH);
   assert.equal(tooled.length, 3, 'the ping probe, the proposal tool and search');
   assert.equal(tooled[0].name, 'dsh_memory_ping');
@@ -176,8 +177,8 @@ test('apply also works when services arrive as context properties', () => {
   const registered = [];
   const webServer = { register(route) { registered.push(route); return () => {}; } };
   apply({ webServer });
-  // APP_ROUTE_NAMES plus the ping probe and the trace stream.
-  assert.equal(registered.length, APP_ROUTE_NAMES.length + 2);
+  // APP_ROUTE_NAMES plus the ping probe, the trace stream and its switch.
+  assert.equal(registered.length, APP_ROUTE_NAMES.length + 3);
   assert.equal(registered[0].path, PING_PATH);
 });
 
@@ -191,8 +192,8 @@ test('apply never throws and registers the route once a web server exists', () =
   assert.doesNotThrow(() => apply({ get: () => ({ register() { throw new Error('boom'); } }) }));
 
   apply({ get: (name) => (name === 'webServer' ? webServer : undefined), effect: (fn) => { fn(); return () => {}; } });
-  // APP_ROUTE_NAMES plus the ping probe and the trace stream.
-  assert.equal(registered.length, APP_ROUTE_NAMES.length + 2);
+  // APP_ROUTE_NAMES plus the ping probe, the trace stream and its switch.
+  assert.equal(registered.length, APP_ROUTE_NAMES.length + 3);
   assert.equal(registered[0].path, PING_PATH);
 });
 

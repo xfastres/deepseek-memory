@@ -15,6 +15,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 
 import {
   API_PREFIX,
@@ -22,6 +23,7 @@ import {
   createMemoryApp,
   isTrustedRead,
   isTrustedWrite,
+  readJsonBody,
   writeJson,
 } from './host/http-app.js';
 import { CONTEXT_NAME, createInjectionRuntime } from './host/injection.js';
@@ -31,7 +33,7 @@ import { matchKnownEntities } from './host/entity-match.js';
 import { extractCandidates } from './host/extraction.js';
 import { candidateStatusForPolicy, decideAutoMemory, writeAutoAccepted } from './host/auto-memory.js';
 import { searchMemories } from './host/search.js';
-import { createTrace, traceEnabled, TRACE_FILE } from './host/trace.js';
+import { createTrace, envValue, traceEnabled, TRACE_FILE, TRACE_MARKER } from './host/trace.js';
 
 export { API_PREFIX, isTrustedWrite, writeJson };
 
@@ -390,6 +392,44 @@ export function resolveDataDir(env = process.env) {
  */
 export function createRoutes({ dataDir = resolveDataDir(), lookup = () => undefined, getApp: shared, status } = {}) {
   const routes = [{ kind: 'exact', path: PING_PATH, handler: createPingHandler({ status }) }];
+  // `/trace/switch` flips the marker file, so tracing can be turned on and off
+  // without restarting the Host. It writes only that marker, never the ledger,
+  // and it needs the same loopback fence plus the write token as other mutations.
+  routes.push({
+    kind: 'exact',
+    path: `${API_PREFIX}/trace/switch`,
+    handler: async (req, res) => {
+      if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!isTrustedWrite(req)) { writeJson(res, 403, { ok: false, error: 'forbidden' }); return; }
+      // The token lives on the memory app; without it a cross-origin page could
+      // toggle diagnostics. The environment case is fixed and refuses this.
+      let want;
+      try {
+        const body = await readJsonBody(req);
+        want = body !== null && typeof body === 'object' && body.enabled === true;
+      } catch {
+        writeJson(res, 400, { ok: false, error: 'bad-request' });
+        return;
+      }
+      if (envValue() !== '') {
+        writeJson(res, 409, {
+          ok: false,
+          error: 'fixed-by-environment',
+          enabled: traceEnabled(),
+          hint: 'DSH_MEMORY_TRACE is set, so the marker cannot override it',
+        });
+        return;
+      }
+      try {
+        const marker = join(dataDir, TRACE_MARKER);
+        if (want) writeFileSync(marker, `${new Date().toISOString()}\n`, 'utf8');
+        else if (existsSync(marker)) unlinkSync(marker);
+        writeJson(res, 200, { ok: true, enabled: traceEnabled(undefined, { dir: dataDir }), marker });
+      } catch (error) {
+        writeJson(res, 500, { ok: false, error: 'switch-failed' });
+      }
+    },
+  });
   // `/trace` serves the append-only event stream. `?since=<seq>` returns only
   // newer records, which is what a live follower needs; without it the whole
   // file comes back, bounded by `limit`.
@@ -423,7 +463,7 @@ export function createRoutes({ dataDir = resolveDataDir(), lookup = () => undefi
         try {
           text = await readFile(file, 'utf8');
         } catch {
-          writeJson(res, 200, { ok: true, enabled: traceEnabled(), count: 0, records: [], lastSeq: 0 });
+          writeJson(res, 200, { ok: true, enabled: traceEnabled(undefined, { dir: dataDir }), count: 0, records: [], lastSeq: 0 });
           return;
         }
         const records = [];
@@ -442,7 +482,7 @@ export function createRoutes({ dataDir = resolveDataDir(), lookup = () => undefi
         const kept = records.slice(-limit);
         writeJson(res, 200, {
           ok: true,
-          enabled: traceEnabled(),
+          enabled: traceEnabled(undefined, { dir: dataDir }),
           count: kept.length,
           total: records.length,
           lastSeq: kept.length === 0 ? since : kept[kept.length - 1].seq,

@@ -79,7 +79,7 @@ export function isTrustedRead(req) {
  */
 export const isTrustedWrite = isTrustedRead;
 
-async function readJsonBody(req) {
+export async function readJsonBody(req) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
