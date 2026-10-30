@@ -108,11 +108,17 @@ Host 在回环地址注册 `/api/dsh-memory/*`。读、写都要求回环 socket
 
 ## 观察一条消息的流转
 
-三个只读脚本，用来回答「我发一句话，记忆到底做了什么、往 prompt 里注入了什么」。它们不写账本、不改状态，并直接复用 `host/retrieval.js` 的渲染逻辑，所以打印出来的注入原文与真正进入 prompt 的一字不差。
+三个只读脚本，用来回答「我发一句话，记忆到底做了什么、往 prompt 里注入了什么」。它们不写账本、不改状态。`memory-flow-trace.mjs` 和 `memory-flow-watch.mjs` 直接复用 `host/retrieval.js` 的渲染，所以和真正进入 prompt 的原文一致。实时对照打印的是埋点当时记下的注入原文，也就是 provider 返回的那一段。
 
-### 实时流水（推荐）—— `scripts/memory-flow-live.mjs`
+### 实时对照（推荐）—— `scripts/memory-flow-live.mjs`
 
-一发消息就实时打印：消息进来 → 提取 → 候选 → 快照 → 注入 → 面板调用，每一步都带真实数据。
+跟着事件流，把一轮真正的记忆步骤收成三块，方便对照「为什么这么排」：
+
+- **进去**：会话、轮次、你的原文。这一步只抄下来，不改对话。
+- **做了什么**：规则抽出几条、账本快照、常驻约束、提示词接口有没有挂上。读账本放在步边界，是因为后面组装提示词是同步的，不能在那里等 Git。
+- **出来**：注入了多少字（或 0 字 / 还没有）、候选几条、策略是留待审还是仅仅「尝试写入」。注入只读快照，不写账本；抽出来的句子默认也不进账本。
+
+本脚本自己每秒的 `GET /trace`，以及面板刷新用的 `GET /state`、`GET /candidates` 等，默认不打印。Host 对每个路由都会记一条 `http`，所以这些轮询原来会把真正的记忆路径埋住。启动时打印的说明和每一轮卡片上的三块标题是同一套话。
 
 **先开埋点**（用标记文件，开关不需要重启 DSH）：
 
@@ -129,9 +135,10 @@ node scripts/memory-trace-switch.mjs --off  # 关闭
 然后：
 
 ```powershell
-node scripts/memory-flow-live.mjs                # 跟随最新事件
-node scripts/memory-flow-live.mjs --from-start   # 回放全部历史
-node scripts/memory-flow-live.mjs --compact      # 一行一事件
+node scripts/memory-flow-live.mjs                # 对照视图，跟随最新事件
+node scripts/memory-flow-live.mjs --from-start   # 从头回放
+node scripts/memory-flow-live.mjs --raw-http     # 连只读轮询的原始 HTTP 也打
+node scripts/memory-flow-live.mjs --compact      # 一行一条（仍然藏起轮询）
 ```
 
 事件类型：
@@ -145,7 +152,7 @@ node scripts/memory-flow-live.mjs --compact      # 一行一事件
 | `snapshot` | 快照刷新（记忆数、被屏蔽数、head） |
 | `constraints` | 约束解析结果 |
 | `inject` | **真正注入 prompt 的原文**、选中/排除每条及原因、池占用 |
-| `http` | 面板操作：路由、耗时、状态码 |
+| `http` | 面板或本脚本的 HTTP。只读轮询默认不显示；写入会单独成一块 |
 | `propose` | AI 提案入队（不写账本） |
 | `search` | `memory_search` 调用结果 |
 
@@ -207,6 +214,7 @@ Windows 下不要把目录传给 `node --test`，按文件跑：
 
 ```powershell
 node --test --test-force-exit packages/dsh-memory/test/*.test.mjs
+node --test scripts/memory-flow-live.test.mjs
 node --test packages/provider-git-ledger/test/*.js
 node --test packages/l0-conversation/test/*.js
 ```

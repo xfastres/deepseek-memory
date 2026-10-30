@@ -106,7 +106,7 @@ async function main() {
 
   console.log('');
   if (t?.enabled) {
-    console.log(' 下一步：另开终端运行实时流水');
+    console.log(' 下一步：另开终端看实时对照（进去 / 做了什么 / 出来）');
     console.log('   node scripts/memory-flow-live.mjs');
   } else {
     console.log(' 下一步：打开埋点');
