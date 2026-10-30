@@ -26,6 +26,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { candidatePorts } from './lib/host-probe.mjs';
 
 // ── 参数 ────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -60,7 +61,7 @@ const CANDIDATE_PLUGIN_DIRS = [
   PLUGIN_DIR,
 ].filter(Boolean);
 
-const CANDIDATE_PORTS = opt.port ? [opt.port] : [43337, 24938];
+const CANDIDATE_PORTS = candidatePorts(opt.port);
 
 // ── 复用插件的真实逻辑 ──────────────────────────────────────────────────
 let retrieval = null;

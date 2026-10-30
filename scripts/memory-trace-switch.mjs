@@ -14,29 +14,22 @@
  */
 
 import { existsSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { dataDir, probeHost } from './lib/host-probe.mjs';
 
 const argv = process.argv.slice(2);
 const want = argv.includes('--on') ? true : argv.includes('--off') ? false : null;
 const statusOnly = argv.includes('--status') || want === null;
 
-const DATA_DIR = process.env.DSH_MEMORY_DATA_DIR?.trim() || join(homedir(), '.dsh', 'dsh-memory');
+let explicitPort = null;
+for (let i = 0; i < argv.length; i += 1) {
+  if (argv[i].startsWith('--port=')) explicitPort = Number(argv[i].slice(7));
+  else if (argv[i] === '--port') explicitPort = Number(argv[++i]);
+}
+
+const DATA_DIR = dataDir();
 const MARKER = join(DATA_DIR, 'trace-on');
 const TRACE = join(DATA_DIR, 'trace.jsonl');
-const PORTS = [44885, 52995, 43337, 24938];
-
-async function probeHost() {
-  for (const port of PORTS) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/api/dsh-memory/ping`);
-      if (!r.ok) continue;
-      const json = await r.json();
-      return { port, trace: json.injection?.trace ?? null };
-    } catch { /* 换端口 */ }
-  }
-  return null;
-}
 
 function sizeOf(path) {
   try {
@@ -72,7 +65,7 @@ async function main() {
     console.log('');
   }
 
-  const host = await probeHost();
+  const host = await probeHost({ port: explicitPort });
   const onDisk = existsSync(MARKER);
   const traceSize = sizeOf(TRACE);
 
@@ -92,7 +85,7 @@ async function main() {
     return;
   }
 
-  const t = host.trace;
+  const t = host.ping?.injection?.trace;
   console.log(` Host        http://127.0.0.1:${host.port}`);
   console.log(` 运行中      ${t?.enabled ? '已开' : '已关'}（来源：${t?.source ?? '未知'}）`);
   console.log(` 已写入      ${t?.written ?? 0} 条${t?.dropped ? `（丢弃 ${t?.dropped}）` : ''}`);

@@ -21,6 +21,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { candidatePorts } from './lib/host-probe.mjs';
 
 // ═══ 参数 ══════════════════════════════════════════════════════════════
 const argv = process.argv.slice(2);
@@ -64,8 +65,10 @@ for (const dir of PLUGIN_DIRS) {
 
 // ═══ HTTP ══════════════════════════════════════════════════════════════
 let port = null;
+let resolvedPorts = null;
 async function api(path) {
-  for (const p of port ? [port] : (opt.port ? [opt.port] : [52995, 43337, 24938])) {
+  if (resolvedPorts === null) resolvedPorts = candidatePorts(opt.port);
+  for (const p of port ? [port] : resolvedPorts) {
     try {
       const r = await fetch(`http://127.0.0.1:${p}/api/dsh-memory${path}`);
       if (!r.ok) continue;

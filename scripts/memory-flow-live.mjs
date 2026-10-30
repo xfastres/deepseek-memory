@@ -20,8 +20,7 @@
  * 只读：只 GET /trace，不写账本、不改状态。
  */
 
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dataDir, makeApi, probeHost } from './lib/host-probe.mjs';
 
 const argv = process.argv.slice(2);
 const opt = { fromStart: false, compact: false, port: null, interval: 1 };
@@ -34,22 +33,11 @@ for (let i = 0; i < argv.length; i += 1) {
   else if (a.startsWith('--interval=')) opt.interval = Math.max(0.2, Number(a.slice(11)));
 }
 
-const DATA_DIR = process.env.DSH_MEMORY_DATA_DIR?.trim() || join(homedir(), '.dsh', 'dsh-memory');
-const PORTS = opt.port ? [opt.port] : [52995, 43337, 24938];
+const DATA_DIR = dataDir();
 
 // ═══ HTTP ══════════════════════════════════════════════════════════════
 let port = null;
-async function api(path) {
-  for (const p of port ? [port] : PORTS) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${p}/api/dsh-memory${path}`);
-      if (!r.ok) continue;
-      port = p;
-      return await r.json();
-    } catch { /* 换端口 */ }
-  }
-  return null;
-}
+let api = null;
 
 // ═══ 显示宽度 ══════════════════════════════════════════════════════════
 function dw(text) {
@@ -208,20 +196,21 @@ function render(rec, seqWidth) {
 
 // ═══ 主循环 ════════════════════════════════════════════════════════════
 async function main() {
-  const probe = await api('/ping');
-  if (!probe) {
+  const host = await probeHost({ port: opt.port });
+  if (host === null) {
     console.log('✗ 连不上 Host。DSH 是否在运行？可试 --port <端口>');
     process.exitCode = 1;
     return;
   }
+  port = host.port;
+  api = makeApi(port);
+  const probe = host.ping;
   if (!probe.injection?.trace?.enabled) {
     console.log('');
-    console.log('⚠ 插件侧埋点没开，事件流是空的。需要两步：');
+    console.log('⚠ 插件侧埋点没开，事件流是空的。');
     console.log('');
-    console.log('   1. 在启动 DSH 的环境变量里设置：');
-    console.log('      DSH_MEMORY_TRACE=1');
-    console.log('');
-    console.log('   2. 重启 DSH（Host 代码改动必须重启才生效）');
+    console.log('   打开埋点（不需要重启 DSH）：');
+    console.log('     node scripts/memory-trace-switch.mjs --on');
     console.log('');
     console.log('   然后重新运行本脚本。');
     console.log('');
