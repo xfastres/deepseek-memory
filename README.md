@@ -1,4 +1,4 @@
-# dsh-memory
+﻿# dsh-memory
 
 [GitHub](https://github.com/xfastres/deepseek-memory) · DeepSeek Harness（DSH）的原生长期记忆插件。
 
@@ -227,7 +227,7 @@ node packages/dsh-memory/eval/run-extraction-eval.mjs
 
 阶段 1 安全边界验收时：插件约 400、账本 31、L0 7。只读审计基线（414）见 [phase0](docs/status/phase0-readonly-audit.md)。以当时 `node --test` 输出为准。
 
-当前总计 **465 项通过**（43 个测试文件，三包全绿）。
+当前总计 **474 项通过**（43 个测试文件，三包全绿）。
 
 ## 设计约束
 

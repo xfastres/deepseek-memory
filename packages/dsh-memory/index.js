@@ -42,7 +42,7 @@ export const PING_PATH = `${API_PREFIX}/ping`;
 
 /** Routes served by the memory application, in addition to the ping probe. */
 export const APP_ROUTE_NAMES = Object.freeze([
-  'state', 'history', 'changes', 'export', 'add', 'update', 'retract', 'migrate', 'candidates', 'candidate', 'review', 'objections', 'objections/clear', 'settings', 'proposals', 'injections',
+  'state', 'history', 'changes', 'export', 'add', 'update', 'retract', 'erase', 'migrate', 'candidates', 'candidate', 'review', 'objections', 'objections/clear', 'settings', 'proposals', 'injections',
 ]);
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);

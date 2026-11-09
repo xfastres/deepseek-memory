@@ -16,6 +16,7 @@ import { evaluateCandidatePolicies } from './policy.js';
 import { toLedgerType } from './memory-types.js';
 import { CORRECTION_KINDS } from './corrections.js';
 import { narrowingRequest } from './narrowing.js';
+import { describeErasure, describeErasureResult } from './erasure.js';
 import { AUTO_ACCEPT_TYPE_CHOICES, loadSettings, updateSettings } from './settings.js';
 import { isOpenCandidateStatus, PROPOSAL_ACTIONS } from './runtime-store.js';
 
@@ -442,6 +443,64 @@ export function createMemoryApp(options = {}) {
           reason: typeof body.reason === 'string' ? body.reason : undefined,
         });
         writeJson(res, 200, { ok: true, ...result });
+      } catch (error) {
+        fail(res, error);
+      }
+    },
+
+    /**
+     * Permanent erasure (§8.3 "彻底删除", phase 5.4).
+     *
+     * Not a variant of /retract: a retraction stops use and keeps the history,
+     * an erasure rewrites the history to remove the text. Because it is
+     * irreversible it requires `confirm: true` in the body — a missing
+     * confirmation is a 400, not a silent success — and it answers with the
+     * scope it actually reached. `complete` is always false: a backup, a clone
+     * or an earlier export is outside what this route can promise.
+     */
+    [`${API_PREFIX}/erase`]: async (req, res) => {
+      if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return; }
+      if (!authorizeWrite(req, res)) return;
+      if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
+      try {
+        const body = await readJsonBody(req);
+        if (typeof body.memoryId !== 'string' || body.memoryId === '') {
+          writeJson(res, 400, { ok: false, error: 'missing-id' });
+          return;
+        }
+        // Second confirmation, as the roadmap requires for an irreversible step.
+        if (body.confirm !== true) {
+          writeJson(res, 400, { ok: false, error: 'confirm-required', scope: describeErasure() });
+          return;
+        }
+        const result = await service.erase({ memoryId: body.memoryId });
+        // A memory that was not there is reported as such rather than as a
+        // successful erasure of nothing.
+        if (result.erased !== true) {
+          writeJson(res, result.reason === 'not-found' ? 404 : 409, { ok: false, error: result.reason ?? 'not-erased', ...result });
+          return;
+        }
+        // Runtime copies: candidates, objections, proposals and audit rows that
+        // name this memory. The ledger cannot reach them.
+        let runtimeCleared = 0;
+        try {
+          runtimeCleared = await runtime.forgetMemory(body.memoryId);
+        } catch {
+          // Reported, not hidden: the ledger part succeeded, the runtime part
+          // did not, and the caller must be able to tell the difference.
+          writeJson(res, 200, { ok: true, ...result, runtime_cleared: null, runtime_error: 'failed' });
+          return;
+        }
+        writeJson(res, 200, {
+          ok: true,
+          ...result,
+          scopes: [...result.scopes, 'runtime'],
+          runtime_cleared: runtimeCleared,
+          message: describeErasureResult({
+            erased: true,
+            scopes: [...result.scopes, 'runtime'],
+          }).message,
+        });
       } catch (error) {
         fail(res, error);
       }

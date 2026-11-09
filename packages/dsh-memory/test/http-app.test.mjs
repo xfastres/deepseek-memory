@@ -907,6 +907,72 @@ test('clearing an objection refuses a missing id the same way its sibling routes
   });
 });
 
+test('the erase route demands a confirmation and reports what it could not reach', async () => {
+  // §8.3: erasure is irreversible, so it needs a second confirmation, and it
+  // must never answer with a stronger claim than it achieved. A retraction keeps
+  // history; only this route rewrites it.
+  await withApp(async (dir) => {
+    const app = testApp(dir);
+    const headers = await writeHeaders(app);
+    const created = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers,
+      body: { content: '要被彻底删除的内容 SECRET777', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    assert.equal(created.status, 200);
+    const memoryId = created.json.memory.id;
+
+    const missingId = await call(app, '/api/dsh-memory/erase', { method: 'POST', headers, body: {} });
+    assert.equal(missingId.status, 400);
+    assert.equal(missingId.json.error, 'missing-id');
+
+    // Without confirm, nothing happens and the reachable/unreachable scope is
+    // spelled out so the caller knows what it is about to do.
+    const noConfirm = await call(app, '/api/dsh-memory/erase', { method: 'POST', headers, body: { memoryId } });
+    assert.equal(noConfirm.status, 400);
+    assert.equal(noConfirm.json.error, 'confirm-required');
+    assert.ok(Array.isArray(noConfirm.json.scope.unreachable));
+    assert.equal((await call(app, '/api/dsh-memory/state')).json.memories.length, 1, 'a refused erase writes nothing');
+
+    const erased = await call(app, '/api/dsh-memory/erase', { method: 'POST', headers, body: { memoryId, confirm: true } });
+    assert.equal(erased.status, 200);
+    assert.equal(erased.json.erased, true);
+    assert.equal(erased.json.complete, false, 'it never claims every copy is gone');
+    assert.ok(erased.json.scopes.includes('runtime'), 'runtime copies are cleared too');
+    assert.match(erased.json.message, /备份/, 'the sentence names what remains out of reach');
+
+    const after = await call(app, '/api/dsh-memory/state');
+    assert.deepEqual(after.json.memories, [], 'the memory is gone');
+
+    const again = await call(app, '/api/dsh-memory/erase', { method: 'POST', headers, body: { memoryId, confirm: true } });
+    assert.equal(again.status, 404);
+    assert.equal(again.json.error, 'not-found');
+  });
+});
+
+test('erasing clears the runtime copies that named the memory', async () => {
+  await withApp(async (dir) => {
+    const app = testApp(dir);
+    const headers = await writeHeaders(app);
+    const created = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers,
+      body: { content: '这条会被删除，并且有一条异议 RUNTIME888', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    const memoryId = created.json.memory.id;
+    await call(app, '/api/dsh-memory/objections', {
+      method: 'POST', headers, body: { memoryId, kind: 'wrong', reason: '用户说这条有误' },
+    });
+    assert.ok((await call(app, '/api/dsh-memory/objections')).json.suppressed.includes(memoryId));
+
+    const erased = await call(app, '/api/dsh-memory/erase', { method: 'POST', headers, body: { memoryId, confirm: true } });
+    assert.equal(erased.status, 200);
+    assert.equal(erased.json.erased, true);
+
+    const objections = await call(app, '/api/dsh-memory/objections');
+    assert.ok(!objections.json.suppressed.includes(memoryId), 'the objection is gone with the memory');
+    assert.deepEqual(objections.json.objections, [], 'and no objection row still names it');
+  });
+});
+
 test('a settled candidate cannot be accepted again with different text', async () => {
   // Regression: /review accept had no status check, so re-accepting a settled
   // candidate hit the idempotency receipt, replayed the ORIGINAL commit and

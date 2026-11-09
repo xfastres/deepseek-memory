@@ -1288,3 +1288,15 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：`runtime-store` +1（灌入 530 条已拒绝候选 + 1 条 open：open 必留、open 计数为 1、已拒绝数 ≤ 上限且 > 0）。完整套件 **465/465 通过**（43 文件，三包全绿）。旧实现行为已用探针确认：700 条已结束候选一条不删。
 - 说明：这是**容量治理**，不是功能缺陷。上限取得很宽，只有在数百条已结束条目之后才会生效；不改变任何现有读取语义。
 - 未验证：真实长期使用下的实际文件大小与写入耗时；`SETTLED_MAX_AGE_DAYS=90` / 500 条这两个值没有真实使用数据支撑（属于保守取值）；面板没有「已归档」视图，被裁剪的已结束条目在 UI 中直接消失（账本里的正式记忆不受影响）。
+
+### 迭代 47（2026-11-09，阶段 5.4：撤回与彻底删除分开，且如实报告能清到哪）
+- 依据：`roadmap §8.3`（撤回停止检索但保留历史；彻底删除要重写历史并处理索引/导出/日志副本；**不能宣称重写 Git 历史就自动删除了所有副本**）、`§13.3` 第 7 条（撤回与彻底删除必须清楚区分）、阶段 5.4（隐私删除流程）。缺口证据：全仓库搜不到任何删除实现；纠错类型里的 `delete` 只是记一条异议。探针实测：用户说「删掉这条记忆」后，记忆仍是 `active`，只是被抑制——**正文仍在 Git、仍能从 `/state` `/history` `/export` 读到**，而面板把这个选项标成「删除」。这是对用户自己数据的虚假陈述。
+- 实现：
+  - 新增 `host/erasure.js`（纯函数，无副作用）：`deletionIntent()` 明确 `delete`/`should_not_save` 只等于异议（`reason: 'objection-only'`）；`describeErasure()` 以数据形式列出**可达**（账本工作树 / Git 历史 / 运行时副本）与**不可达**（备份、已导出数据、DSH 会话日志）范围；`planErasure()` 报告会被牵连的邻居 id（supersede 链另一端会指向不存在的 id）；`describeErasureResult()` 生成的句子永远带上「备份…不在清理范围内」。
+  - `provider-git-ledger`：新增 `MemoryLedger.eraseMemory()`。与 `apply()` 刻意分开——变更是追加历史，擦除必须改写历史。用 `git filter-branch --index-filter` 删掉该记忆的 record、每个 change 的 `.json` 与 `.md`（**变更说明是人类可读的正文副本，必须一起删**），然后删除 `refs/original/*`、清 reflog、`gc --prune=now`，最后删掉 `applied/` 里指向它的幂等 receipt 与 `outbox/` 行（这两类在 Git 之外，filter-branch 碰不到）。路径在进入 shell 前逐个校验（只允许 `[A-Za-z0-9._/-]` 且不含 `..`），因为引号写错会删错文件。
+  - `ledger-service.erase()` 暴露该能力，`complete` **恒为 false**、`unreachable` 恒列出三项。
+  - `runtime-store.forgetMemory()` 清理指向该记忆的候选、异议、提案与注入审计行，返回清理条数。
+  - `http-app` 新增 `POST /erase { memoryId, confirm: true }`：缺 `confirm` → `400 confirm-required`（并附可达/不可达范围）；不存在 → `404 not-found`；运行时清理失败时返回 `runtime_error` 而不是假装全成功。加入 `APP_ROUTE_NAMES`。
+  - `correction-detect.applyCorrection()` 返回值新增 `deletion`，自然语言路径也不再把「删除」说成已删除。
+- 测试：新增 `erasure.test.mjs` 7 项（异议≠删除、范围清单、计划与悬空邻居、句子不夸大、**擦除后遍历所有 commit 的所有 blob 断言不含原文**、未知 id 返回 not-found、非法 id 在到达 git 前拒绝）；`http-app` +2（确认必填与 `complete:false` 与 `404`；运行时副本随之清理）。`host.test` 路由清单加入 `/erase`。完整套件 **474/474 通过**（44 文件，三包全绿）。
+- 未验证：真实宿主上的端到端（`filter-branch` 在真实仓库规模下的耗时未测；测试里一次擦除约 18 秒，主要花在遍历校验上）；`filter-repo` 未安装，只能用 `filter-branch`（已弃用但仍可用）；面板尚无「彻底删除」入口（只有 API）；不可达范围里的「备份」没有任何实际清理机制。

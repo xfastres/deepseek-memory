@@ -101,6 +101,11 @@
 
 > 变更证据（§5.1）：`POST /update` 与 `POST /retract` 接受可选 `sourceRef`（或 `sessionId` + `turn`，由 Host 解析成 ref）。**给了就用它核验**；没给时核验**被改记忆自身携带的 `source_refs`**——一次正式变更总要有可核验的证据，核验不通过返回 `422 no-evidence` 且账本零改动。`verify([])` 不再返回「已核验」：空集合的全称命题为真，但那不构成任何证据，此前正是它让这两个路由在零条证据下写入。核验通过的 ref 会写回该次变更记录，历史里不会留下「对空集已核验」的痕迹。
 
+> 撤回与彻底删除（§8.3 / 阶段 5.4）：这是**两件不同的事**，路由也分开。
+> - `POST /retract { memoryId, expectedBaseChangeId, sourceRef? }` → 停止检索与注入，**保留 Git 历史**，可撤回。
+> - `POST /erase { memoryId, confirm: true }` → 重写 Git 历史，移除正文。**不可逆**，所以 `confirm` 不是 `true` 时返回 `400 confirm-required`（并在响应里给出 `scope`：哪些地方能清、哪些清不到），不会静默成功。成功时 `scopes` 为 `['ledger','history','runtime']`，并清理运行时里指向它的候选/异议/提案/注入审计行（`runtime_cleared` 计数）。`complete` **恒为 `false`**：备份、已通过 `/export` 导出的数据、以及证据指向的 DSH 会话日志都在可达范围之外，响应会明确列出。记忆不存在返回 `404 not-found`；非法 id 在到达 git 之前就被拒绝。
+> - 纠错类型里的 `delete` / `should_not_save` **只是异议**，只把记忆从检索与注入中隐藏，正文仍在账本、历史与导出里。自然语言路径的返回带 `deletion: { erase: false, retract: false, reason: 'objection-only' }`，面板与模型都不该把它当成已删除。
+
 > 修正即回应异议（§6.5）：`POST /update` 可选 `clearObjection: true`，写入成功后清除该记忆的活动异议（响应带 `objection_cleared`；本就没有异议不算错误，返回 `false`）。未带该字段的普通修改不改变异议状态。面板对「待核查」行提供「接受现状」（等价于 `POST /objections/clear`），以及在编辑保存时自动带上 `clearObjection`。
 
 > 核查类异议（§6.3）：`too_broad`/`missing_context`/`wrong_scope`/`duplicate` 是「请重新核查」而不是「判为错误」，`GET /objections` 因此额外返回 `review_pending`（这些记忆的 id 数组）。它们**同时仍在 `suppressed` 中**：未核查清楚的记忆不得被当作已确认结论；面板对这类行显示「待核查」。自动接受路径拿不到这些记忆的重新激活权：`decideAutoMemory` 遇到「正文与待核查记忆相同」的候选直接降为 `REVIEW_REQUIRED`（`reasons: ['objected-memory']`）。

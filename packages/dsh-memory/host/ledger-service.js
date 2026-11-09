@@ -397,6 +397,29 @@ export function createLedgerService(options = {}) {
     });
   }
 
+  /**
+   * Permanently erase one memory (§8.3 "彻底删除").
+   *
+   * Separate from `retract` on purpose: a retraction stops use and keeps the
+   * history, an erasure removes the text from the history. It reports exactly
+   * what it reached, and `complete` stays false because a backup, a clone or an
+   * earlier export is outside this repository's reach.
+   */
+  async function erase({ memoryId }) {
+    const ready = await open();
+    const result = await ready.eraseMemory(memoryId);
+    return {
+      erased: result.erased === true,
+      memory_id: memoryId,
+      reason: result.reason ?? null,
+      scopes: Array.isArray(result.scopes) ? result.scopes : [],
+      removed: result.removed ?? { receipts: 0, outbox: 0 },
+      // Never upgraded to true: rewritten history is not every copy gone.
+      complete: false,
+      unreachable: Array.isArray(result.unreachable) ? result.unreachable : ['backup', 'export', 'session-log'],
+    };
+  }
+
   return {
     open,
     state,
@@ -406,6 +429,7 @@ export function createLedgerService(options = {}) {
     add,
     update,
     retract,
+    erase,
     apply,
     applyGated,
     /** MemoryWriter calls this once. A second registration is refused. */

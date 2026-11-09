@@ -446,6 +446,146 @@ export class MemoryLedger {
     await rm(join(this.root, 'outbox', `${changeId}.json`), { force: true });
   }
 
+  // ---------- erasure (§8.3) ----------
+
+  /**
+   * Remove one memory and every trace of its text from this repository.
+   *
+   * This is deliberately NOT `apply()`: a change is additive history, and an
+   * erasure has to remove the text from the history itself. So it is a separate
+   * operation with its own semantics, and it reports exactly what it reached.
+   *
+   * Steps, in order:
+   *   1. `git filter-branch` rewrites every commit that touched the record,
+   *      the change files and the change notes, deleting those paths. Text that
+   *      only ever lived in one of those files disappears with them.
+   *   2. The rewritten refs are made durable and the original refs dropped.
+   *   3. The idempotency receipts and outbox rows for those changes are removed
+   *      (they are outside history, so filter-branch does not touch them).
+   *
+   * It cannot reach a backup, a clone, or anything already exported. The caller
+   * is responsible for saying so; `result.complete` is false for exactly that
+   * reason and must not be reported as a full erasure.
+   */
+  async eraseMemory(memoryId, { signal } = {}) {
+    if (!isId(memoryId)) throw new SchemaError('memory id is not a valid record id');
+    const release = await this.lock.acquire();
+    try {
+      return await this.eraseUnderLock(memoryId, signal);
+    } finally {
+      await release();
+    }
+  }
+
+  async eraseUnderLock(memoryId, signal) {
+    const before = await this.getMemory(memoryId);
+    if (before === undefined) {
+      return { erased: false, reason: 'not-found', memoryId, scopes: [], complete: false };
+    }
+    // Every change that ever touched this record, so its change file and note go
+    // too. Without this the note keeps a human-readable copy of the text.
+    const history = await this.history(memoryId);
+    const changeIds = [...new Set(history.map((entry) => entry.change_id).filter((id) => typeof id === 'string'))];
+
+    // Paths are the whole content story: the record, one change file and one
+    // note per change. Nothing else in the repository holds the text.
+    const paths = [recordPath(memoryId)];
+    for (const changeId of changeIds) {
+      paths.push(changePath(changeId), changeNotePath(changeId));
+    }
+
+    // `--index-filter` runs the command itself and does NOT receive a path list
+    // on stdin, so the paths have to be part of the command. Every path here is
+    // built from a validated id or a ledger-generated change id, so none can
+    // contain shell metacharacters; the check is still made explicit rather than
+    // assumed, because a quoting mistake here would delete the wrong files.
+    for (const path of paths) {
+      if (!/^[A-Za-z0-9._/-]+$/u.test(path) || path.includes('..')) {
+        throw new SchemaError(`refusing to rewrite history for an unsafe path: ${path}`);
+      }
+    }
+    const quoted = paths.map((path) => `'${path}'`).join(' ');
+    try {
+      await this.git.run([
+        'filter-branch',
+        '-f',
+        '--index-filter',
+        `git rm -q --cached --ignore-unmatch -- ${quoted}`,
+        '--prune-empty',
+        '--',
+        '--all',
+      ], { signal });
+    } catch (error) {
+      // A history rewrite that fails must leave the repository readable. The
+      // worktree is untouched until the rewrite succeeds, so nothing is lost.
+      throw new GitError(`erasing ${memoryId} failed during history rewrite (${error?.message ?? error})`, {
+        args: error?.args,
+        exitCode: error?.exitCode,
+        stderr: error?.stderr,
+      });
+    }
+
+    // Drop the refs filter-branch kept for rollback; they hold the old history
+    // and would otherwise preserve exactly the text we were asked to remove.
+    await this.git.run(['update-ref', '-d', 'refs/original/refs/heads/main']).catch(() => {});
+    await this.git.run(['for-each-ref', '--format=%(refname)', 'refs/original/']).then(async (out) => {
+      for (const ref of out.split('\n').map((line) => line.trim()).filter(Boolean)) {
+        await this.git.run(['update-ref', '-d', ref]).catch(() => {});
+      }
+    }).catch(() => {});
+
+    // Receipts and outbox rows live outside history, so they survive the
+    // rewrite; a receipt maps an idempotency key to the memory id we just
+    // erased, which is a link back to it.
+    const removed = { receipts: 0, outbox: 0 };
+    try {
+      const names = await readdir(join(this.root, 'applied'));
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue;
+        const path = join(this.root, 'applied', name);
+        try {
+          const receipt = JSON.parse(await readFile(path, 'utf8'));
+          if (receipt !== null && typeof receipt === 'object' && receipt.memory_id === memoryId) {
+            await rm(path, { force: true });
+            removed.receipts += 1;
+          }
+        } catch {
+          // An unreadable receipt is not this memory's; leave it alone.
+        }
+      }
+    } catch {
+      // No applied/ directory yet: nothing to clean.
+    }
+    for (const changeId of changeIds) {
+      const path = join(this.root, 'outbox', `${changeId}.json`);
+      try {
+        await rm(path, { force: true });
+        removed.outbox += 1;
+      } catch {
+        // Already drained by the projection.
+      }
+    }
+
+    // A rewritten history leaves the working tree at the new HEAD, but the
+    // reflog still names the old commits. Expiring it is part of erasure.
+    await this.git.run(['reflog', 'expire', '--expire=now', '--all']).catch(() => {});
+    await this.git.run(['gc', '--prune=now', '--quiet']).catch(() => {});
+
+    const stillThere = await this.getMemory(memoryId);
+    return {
+      erased: stillThere === undefined,
+      reason: stillThere === undefined ? null : 'still-present',
+      memoryId,
+      changeIds,
+      scopes: stillThere === undefined ? ['ledger', 'history'] : [],
+      removed,
+      // Rewritten history is not "every copy is gone" (§8.3). The caller must
+      // not upgrade this to a complete erasure.
+      complete: false,
+      unreachable: ['backup', 'export', 'session-log'],
+    };
+  }
+
   /** Mnemon `remember` input -> ledger ADD proposal. Kept here so the mapping is testable without Cordis. */
   static proposalFromRemember(request, { ownerId, idempotencyKey, sourceRefs, reason, actor = 'agent' }) {
     const sourceKind = request.source === 'user' ? 'user-explicit' : request.source === 'external' ? 'session-extraction' : 'agent-inference';

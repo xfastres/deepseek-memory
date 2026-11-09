@@ -61,6 +61,7 @@ test('the Host half exposes the ping probe plus the memory routes', () => {
     '/api/dsh-memory/add',
     '/api/dsh-memory/update',
     '/api/dsh-memory/retract',
+    '/api/dsh-memory/erase',
     '/api/dsh-memory/migrate',
     '/api/dsh-memory/candidates',
     '/api/dsh-memory/candidate',

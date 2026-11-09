@@ -17,6 +17,7 @@
 import { normalizeCorrectionKind } from './corrections.js';
 import { scoreMemory } from './retrieval.js';
 import { narrowingRequest } from './narrowing.js';
+import { deletionIntent } from './erasure.js';
 
 /** The cues, strongest first. `kind` is a documented correction kind. */
 export const CORRECTION_CUES = Object.freeze([
@@ -123,7 +124,18 @@ export async function applyCorrection({ text, memories, suppressedIds, runtime }
     // it is recorded, and no replacement wording exists yet (§6.6).
     const memory = (Array.isArray(memories) ? memories : [])
       .find((row) => row !== null && typeof row === 'object' && row.id === normalized.memoryId) ?? null;
-    return { recorded: true, ...normalized, objection, narrowing: narrowingRequest({ objection, memory }) };
+    return {
+      recorded: true,
+      ...normalized,
+      objection,
+      narrowing: narrowingRequest({ objection, memory }),
+      // A request to delete is NOT a deletion: it records an objection, which
+      // hides the memory from retrieval and injection while leaving the text in
+      // the ledger, its history and /export. Saying "已删除" here would be a
+      // false claim about the user's own data, so the result states what
+      // actually happened and what still has to be done (§8.3).
+      deletion: deletionIntent({ kind }),
+    };
   } catch (error) {
     const code = String((error && error.code) || 'failed');
     // An existing objection is the same outcome: the memory is already hidden.

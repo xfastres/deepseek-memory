@@ -396,6 +396,42 @@ export function createRuntimeStore(options = {}) {
       });
     },
 
+    /**
+     * Remove every runtime trace of one memory (§8.3 "彻底删除").
+     *
+     * The ledger rewrite cannot reach this file, so erasure has to clear it here
+     * or the text survives in a candidate, an objection reason, a proposal or an
+     * injection audit row. Returns how many entries were removed so the caller
+     * can report what actually happened rather than assuming.
+     */
+    async forgetMemory(memoryId) {
+      const id = typeof memoryId === 'string' ? memoryId.trim() : '';
+      if (id === '') throw new RuntimeStoreError('forgetMemory needs a memory id', 'empty');
+      return mutate((document) => {
+        let removed = 0;
+        const before = {
+          candidates: document.candidates.length,
+          objections: document.objections.length,
+          proposals: document.proposals.length,
+          injections: document.injections.length,
+        };
+        // A candidate becomes this memory only after acceptance, so it is matched
+        // by the memory id it recorded, not by its text.
+        document.candidates = document.candidates.filter((entry) => entry?.memory_id !== id);
+        document.objections = document.objections.filter((entry) => entry?.memory_id !== id);
+        document.proposals = document.proposals.filter((entry) => entry?.target_memory_id !== id && entry?.memory_id !== id);
+        // An audit row is kept when it does not name the erased memory, and
+        // dropped when it does: the row exists to explain why a block was
+        // injected, and that block included this memory.
+        document.injections = document.injections.filter((entry) => !Array.isArray(entry?.memory_ids) || !entry.memory_ids.includes(id));
+        removed += before.candidates - document.candidates.length;
+        removed += before.objections - document.objections.length;
+        removed += before.proposals - document.proposals.length;
+        removed += before.injections - document.injections.length;
+        return removed;
+      });
+    },
+
     /** Move a candidate to accepted / rejected / edited. The ledger write happens elsewhere. */
     async setCandidateStatus(id, status, meta = {}) {
       if (!CANDIDATE_STATUSES.includes(status)) {
