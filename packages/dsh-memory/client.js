@@ -49,6 +49,8 @@ window.__ModuleLoader__.load({
       evidenceOutside: '该事件不在可读取的会话历史中。',
       evidenceLocated: '已定位到产生这条记忆的用户消息（高亮显示）。',
       retract: '撤回', confirmRetract: '确认撤回', retracted: '已撤回，历史版本仍保留。',
+    erase: '彻底删除', confirmErase: '确认彻底删除', eraseWarning: '会重写 Git 历史，不可撤销；备份与已导出的数据不在清理范围内。', erased: '已彻底删除。', eraseFailed: '删除失败：{reason}',
+    makePrivate: '标记私密', makeNormal: '取消私密', privacyHint: '私密记忆不进入普通注入，也不出现在搜索结果里。', pin: '置顶', unpin: '取消置顶', pinHint: '置顶记忆总是进入注入，不受相关度影响。', traitsSaved: '已保存。',
       retractFailed: '撤回未完成：{reason}', versionChanged: '账本已变化，请刷新后重试。',
       hostBusy: '账本正在写入，请稍后重试。', missingMemory: '这条记忆在账本中已不存在。',
       hostCandidates: 'Host 候选队列（{count}）',
@@ -131,6 +133,8 @@ window.__ModuleLoader__.load({
       evidenceOutside: 'That event is not inside the readable Session history.',
       evidenceLocated: 'Located the user message that produced this memory (highlighted).',
       retract: 'Retract', confirmRetract: 'Confirm retraction', retracted: 'Retracted; history is still kept.',
+    erase: 'Erase permanently', confirmErase: 'Confirm erasure', eraseWarning: 'Rewrites Git history and cannot be undone; backups and earlier exports are out of reach.', erased: 'Erased.', eraseFailed: 'Erasure failed: {reason}',
+    makePrivate: 'Mark private', makeNormal: 'Make normal', privacyHint: 'A private memory never enters ordinary injection and is hidden from search.', pin: 'Pin', unpin: 'Unpin', pinHint: 'A pinned memory always enters injection, regardless of relevance.', traitsSaved: 'Saved.',
       retractFailed: 'Retraction failed: {reason}', versionChanged: 'The ledger changed; refresh and retry.',
       hostBusy: 'The ledger is writing; retry in a moment.', missingMemory: 'This memory no longer exists in the ledger.',
       hostCandidates: 'Host candidate queue ({count})',
@@ -1047,6 +1051,25 @@ window.__ModuleLoader__.load({
           if (typeof reason === 'string' && reason !== '') body.reason = reason;
           return post('/retract', body);
         },
+        /**
+         * Permanently erase one memory (§8.3).
+         *
+         * `confirm` is required by the Host, and it is passed explicitly rather
+         * than defaulted: the caller has to have shown the user what is about to
+         * happen. The response says which scopes were reached and that `complete`
+         * is false, and the panel repeats that rather than upgrading it.
+         */
+        async erase({ memoryId, confirm }) {
+          return post('/erase', { memoryId, confirm: confirm === true });
+        },
+        /** Change how far a memory may travel: privacy and pinning. */
+        async updateTraits({ memoryId, expectedBaseChangeId, sensitivity, pinned }) {
+          const body = { memoryId };
+          if (typeof expectedBaseChangeId === 'string' && expectedBaseChangeId !== '') body.expectedBaseChangeId = expectedBaseChangeId;
+          if (sensitivity === 'normal' || sensitivity === 'private') body.sensitivity = sensitivity;
+          if (typeof pinned === 'boolean') body.pinned = pinned;
+          return post('/update', body);
+        },
         /** Read the runtime candidate queue; this never mutates anything. */
         async candidates() {
           const data = await get('/candidates');
@@ -1372,6 +1395,11 @@ window.__ModuleLoader__.load({
           scope: memory && typeof memory.scope === 'string' ? memory.scope : null,
           tags: memory && Array.isArray(memory.tags) ? memory.tags.filter((tag) => typeof tag === 'string' && tag !== '') : [],
           entities: memory && Array.isArray(memory.entities) ? memory.entities.filter((entity) => typeof entity === 'string' && entity !== '') : [],
+          // How far this memory may travel. The ledger stores both and the
+          // retrieval gates read them, so the row shows them rather than
+          // leaving the user to guess why a memory is or is not injected.
+          sensitivity: memory && typeof memory.sensitivity === 'string' ? memory.sensitivity : null,
+          pinned: memory && memory.pinned === true,
         };
       });
     }
@@ -1925,6 +1953,7 @@ window.__ModuleLoader__.load({
       /** Ledger edit and retract go through the Host writer; nothing is written locally. */
       const [ledgerDraft, setLedgerDraft] = useState(null);
       const [retractId, setRetractId] = useState(null);
+      const [eraseId, setEraseId] = useState(null);
       const [ledgerPending, setLedgerPending] = useState(false);
       const ledgerError = (reason) => (reason === 'stale' ? 'versionChanged'
         : reason === 'busy' || reason === 'ledger-dirty' ? 'hostBusy'
@@ -1956,6 +1985,61 @@ window.__ModuleLoader__.load({
           setLedgerDraft((old) => (old ? { ...old, error: ledgerError(error && error.reason) } : old));
         });
       };
+      /**
+       * Change privacy or pinning without touching the text.
+       *
+       * Both are ledger fields the retrieval gates already read, so the write
+       * goes through the same single writer and the same baseline rule as an
+       * edit: no change id, no write.
+       */
+      const toggleTrait = (row, patch) => {
+        if (ledgerPending || typeof fetch !== 'function') return;
+        if (typeof row.changeId !== 'string' || row.changeId === '') {
+          setNotice(t('saveFailed').replace('{reason}', t('versionChanged')));
+          return;
+        }
+        setLedgerPending(true);
+        createHostClient(fetch).updateTraits({
+          memoryId: row.id,
+          expectedBaseChangeId: row.changeId,
+          ...patch,
+        }).then(() => {
+          setLedgerPending(false);
+          setNotice(t('traitsSaved'));
+          probeHost();
+        }, (error) => {
+          setLedgerPending(false);
+          setNotice(t('saveFailed').replace('{reason}', String((error && error.reason) || 'network')));
+        });
+      };
+
+      /**
+       * Permanently erase one memory.
+       *
+       * Not the same as retracting, and the panel says so: retracting keeps the
+       * Git history, erasing rewrites it. The Host requires `confirm`, and the
+       * notice repeats the Host's own wording about what could not be reached
+       * rather than summarising it into a clean success.
+       */
+      const eraseLedger = (row) => {
+        if (ledgerPending || typeof fetch !== 'function') return;
+        setLedgerPending(true);
+        createHostClient(fetch).erase({ memoryId: row.id, confirm: true }).then((data) => {
+          setLedgerPending(false);
+          setEraseId(null);
+          const message = data && typeof data.message === 'string' && data.message !== ''
+            ? data.message
+            : t('erased');
+          setNotice(message);
+          probeHost();
+        }, (error) => {
+          setLedgerPending(false);
+          setEraseId(null);
+          const reason = String((error && error.reason) || 'network');
+          setNotice(reason === 'not-found' ? t('missingMemory') : t('eraseFailed').replace('{reason}', reason));
+        });
+      };
+
       const retractLedger = (row) => {
         if (ledgerPending || typeof fetch !== 'function') return;
         // Same rule as an edit: no baseline, no write.
@@ -2106,6 +2190,37 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'dm-link', onClick: () => setRetractId(null) }, t('cancel')))
               : row.active
                 ? h('button', { type: 'button', className: 'dm-link', onClick: () => setRetractId(row.id) }, t('retract'))
+                : null,
+            // Privacy and pinning are ledger fields; the toggle writes through
+            // the same single writer as any other change.
+            row.active
+              ? h('button', {
+                type: 'button',
+                className: 'dm-link',
+                disabled: ledgerPending,
+                title: t('privacyHint'),
+                onClick: () => toggleTrait(row, { sensitivity: row.sensitivity === 'private' ? 'normal' : 'private' }),
+              }, row.sensitivity === 'private' ? t('makeNormal') : t('makePrivate'))
+              : null,
+            row.active
+              ? h('button', {
+                type: 'button',
+                className: 'dm-link',
+                disabled: ledgerPending,
+                title: t('pinHint'),
+                onClick: () => toggleTrait(row, { pinned: !row.pinned }),
+              }, row.pinned ? t('unpin') : t('pin'))
+              : null,
+            // Erasure is irreversible and is NOT the same as retracting, so it
+            // asks for a second click and spells out what it can and cannot
+            // reach before doing anything.
+            row.active && eraseId === row.id
+              ? h(React.Fragment, null,
+                h('span', { className: 'dm-muted dm-erase-warning' }, t('eraseWarning')),
+                h('button', { type: 'button', className: 'dm-link dm-danger', disabled: ledgerPending, onClick: () => eraseLedger(row) }, t('confirmErase')),
+                h('button', { type: 'button', className: 'dm-link', onClick: () => setEraseId(null) }, t('cancel')))
+              : row.active
+                ? h('button', { type: 'button', className: 'dm-link dm-danger', onClick: () => setEraseId(row.id) }, t('erase'))
                 : null),
         history.id === row.id ? historyBlock(row) : null);
 

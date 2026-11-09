@@ -787,6 +787,58 @@ test('the ledger header count comes from the Host total, not the drawn slice', a
   assert.match(t('ledgerTitleTruncated'), /\{shown\}/u);
 });
 
+test('the panel can mark a memory private, pin it, and erase it', async () => {
+  // These three are ledger fields and an irreversible route; the panel must send
+  // exactly what the Host requires and nothing it would reject.
+  const { plugin, t } = await load();
+  const calls = [];
+  const client = plugin.createHostClient(async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, erased: true, complete: false, message: '已彻底删除。' }) };
+  });
+
+  // A trait-only change carries no content at all.
+  await client.updateTraits({ memoryId: 'M-1', expectedBaseChangeId: 'c-1', sensitivity: 'private' });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { memoryId: 'M-1', expectedBaseChangeId: 'c-1', sensitivity: 'private' });
+  await client.updateTraits({ memoryId: 'M-1', expectedBaseChangeId: 'c-1', pinned: true });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { memoryId: 'M-1', expectedBaseChangeId: 'c-1', pinned: true });
+
+  // An unknown sensitivity is not forwarded: the Host would reject it anyway,
+  // and sending it would turn a no-op into an error.
+  await client.updateTraits({ memoryId: 'M-1', expectedBaseChangeId: 'c-1', sensitivity: 'secret', pinned: 'yes' });
+  assert.deepEqual(JSON.parse(calls[2].init.body), { memoryId: 'M-1', expectedBaseChangeId: 'c-1' });
+
+  // Erasure always states its confirmation explicitly.
+  await client.erase({ memoryId: 'M-1', confirm: true });
+  assert.equal(calls[3].url, 'api/dsh-memory/erase');
+  assert.deepEqual(JSON.parse(calls[3].init.body), { memoryId: 'M-1', confirm: true });
+  // A caller that does not confirm sends false, so the Host refuses it.
+  await client.erase({ memoryId: 'M-1' });
+  assert.deepEqual(JSON.parse(calls[4].init.body), { memoryId: 'M-1', confirm: false });
+
+  for (const key of ['erase', 'confirmErase', 'eraseWarning', 'erased', 'eraseFailed', 'makePrivate', 'makeNormal', 'privacyHint', 'pin', 'unpin', 'pinHint', 'traitsSaved']) {
+    assert.notEqual(t(key), key, 'missing zh text for ' + key);
+  }
+  assert.match(t('eraseWarning'), /备份|不可撤销/u, 'the warning names the irreversible part');
+  assert.match(t('privacyHint'), /注入/u, 'the privacy hint says what it actually does');
+});
+
+test('a ledger row exposes the privacy and pinning the ledger stored', async () => {
+  const { plugin } = await load();
+  const rows = plugin.ledgerView([
+    { id: 'M-1', status: 'active', content: '私密且置顶', sensitivity: 'private', pinned: true },
+    { id: 'M-2', status: 'active', content: '普通', sensitivity: 'normal', pinned: false },
+    { id: 'M-3', status: 'active', content: '旧记录没有这两个字段' },
+  ]);
+  assert.equal(rows[0].sensitivity, 'private');
+  assert.equal(rows[0].pinned, true);
+  assert.equal(rows[1].sensitivity, 'normal');
+  assert.equal(rows[1].pinned, false);
+  // An old row is reported as unknown rather than invented as "normal".
+  assert.equal(rows[2].sensitivity, null);
+  assert.equal(rows[2].pinned, false);
+});
+
 test('proposal decisions send the proposal id, the action, and only a real base change id', async () => {
   const { plugin, t } = await load();
   const calls = [];

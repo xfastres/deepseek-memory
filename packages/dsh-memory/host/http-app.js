@@ -358,9 +358,15 @@ export function createMemoryApp(options = {}) {
       if (!ensureEvidenceAvailable(res)) return;
       try {
         const body = await readJsonBody(req);
-        const content = typeof body.content === 'string' ? body.content.trim() : '';
         if (typeof body.memoryId !== 'string' || body.memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
-        if (content === '') { writeJson(res, 400, { ok: false, error: 'empty' }); return; }
+        // A trait-only change (privacy, pinning) does not restate the text, so
+        // `content` is optional when at least one trait is given. When it is
+        // given it must still be non-empty: an empty edit is a mistake, not a
+        // way to blank a memory.
+        const hasTrait = body.sensitivity !== undefined || body.pinned !== undefined;
+        const rawContent = typeof body.content === 'string' ? body.content.trim() : '';
+        if (rawContent === '' && !hasTrait) { writeJson(res, 400, { ok: false, error: 'empty' }); return; }
+        if (typeof body.content === 'string' && rawContent === '') { writeJson(res, 400, { ok: false, error: 'empty' }); return; }
         if (!requireBaseChangeId(body.expectedBaseChangeId, res)) return;
         // An UPDATE may cite the session event that prompted it, but the panel's
         // edit flow has no such event (the user typed in a form). The service
@@ -378,11 +384,15 @@ export function createMemoryApp(options = {}) {
         }
         const result = await service.update({
           memoryId: body.memoryId,
-          content,
+          // Undefined means "keep the text": the ledger merges, so a trait-only
+          // change leaves the content exactly as it was.
+          content: rawContent === '' ? undefined : rawContent,
           expectedBaseChangeId: body.expectedBaseChangeId,
           sourceRefs: ref === undefined ? undefined : [ref],
           tags: body.tags,
           entities: body.entities,
+          sensitivity: body.sensitivity,
+          pinned: body.pinned,
         });
         // The new wording answers the objection (§6.5): the user may ask for it
         // to be cleared in the same request, so the memory is not left hidden

@@ -190,7 +190,12 @@ export function validateProposal(value) {
     if (p.source_refs.length === 0) throw new SchemaError('ADD requires at least one source_ref');
   } else {
     if (p.target_memory_id === null) throw new SchemaError(`${changeType} requires target_memory_id`);
-    if ((changeType === 'UPDATE' || changeType === 'SUPERSEDE') && p.content === undefined) throw new SchemaError(`${changeType} requires content`);
+    // An UPDATE may change only a trait (privacy, pinning) without restating the
+    // text. SUPERSEDE always creates a new record, so it still needs content.
+    if (changeType === 'UPDATE' && p.content === undefined && p.sensitivity === undefined && p.pinned === undefined) {
+      throw new SchemaError('UPDATE requires content, or a trait to change');
+    }
+    if (changeType === 'SUPERSEDE' && p.content === undefined) throw new SchemaError(`${changeType} requires content`);
     if (changeType === 'RETRACT' && p.content !== undefined) throw new SchemaError('RETRACT does not accept content');
   }
   return p;

@@ -304,7 +304,9 @@ export class MemoryLedger {
     } else if (proposal.change_type === 'UPDATE') {
       after = validateMemory({
         ...before,
-        content: proposal.content,
+        // A trait-only update omits content; keep the text rather than blanking
+        // it. `undefined` must mean "unchanged" here, not "no content".
+        content: proposal.content ?? before.content,
         type: proposal.type ?? before.type,
         status: 'active',
         source_kind: proposal.source_kind,

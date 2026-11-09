@@ -907,6 +907,52 @@ test('clearing an objection refuses a missing id the same way its sibling routes
   });
 });
 
+test('a trait-only update changes privacy or pinning without restating the text', async () => {
+  // The panel needs to mark a memory private or pin it without sending the body
+  // back. An empty `content` used to be refused unconditionally, so the only way
+  // was to resend the text — which risked editing it by accident.
+  await withApp(async (dir) => {
+    const app = testApp(dir);
+    const headers = await writeHeaders(app);
+    const created = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers,
+      body: { content: '原始正文，标记私密后不应改变。', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    const memory = created.json.memory;
+    assert.equal(memory.sensitivity, 'normal', 'a new memory is normal');
+    assert.equal(memory.pinned, false, 'nothing is pinned by default');
+
+    const updated = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers,
+      body: { memoryId: memory.id, expectedBaseChangeId: memory.last_change_id, sensitivity: 'private', pinned: true },
+    });
+    assert.equal(updated.status, 200);
+    assert.equal(updated.json.memory.sensitivity, 'private');
+    assert.equal(updated.json.memory.pinned, true);
+    assert.equal(updated.json.memory.content, '原始正文，标记私密后不应改变。', 'the text is preserved, not blanked');
+
+    const [row] = (await call(app, '/api/dsh-memory/state')).json.memories;
+    assert.equal(row.sensitivity, 'private', 'the change reached the ledger, not just the response');
+    assert.equal(row.pinned, true);
+
+    // An explicitly empty body is still a mistake, not a way to blank a memory.
+    const blank = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers,
+      body: { memoryId: memory.id, expectedBaseChangeId: row.last_change_id, content: '' },
+    });
+    assert.equal(blank.status, 400);
+    assert.equal(blank.json.error, 'empty');
+
+    // Neither content nor a trait is also refused.
+    const nothing = await call(app, '/api/dsh-memory/update', {
+      method: 'POST', headers,
+      body: { memoryId: memory.id, expectedBaseChangeId: row.last_change_id },
+    });
+    assert.equal(nothing.status, 400);
+    assert.equal(nothing.json.error, 'empty');
+  });
+});
+
 test('the erase route demands a confirmation and reports what it could not reach', async () => {
   // §8.3: erasure is irreversible, so it needs a second confirmation, and it
   // must never answer with a stronger claim than it achieved. A retraction keeps

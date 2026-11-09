@@ -1300,3 +1300,11 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
   - `correction-detect.applyCorrection()` 返回值新增 `deletion`，自然语言路径也不再把「删除」说成已删除。
 - 测试：新增 `erasure.test.mjs` 7 项（异议≠删除、范围清单、计划与悬空邻居、句子不夸大、**擦除后遍历所有 commit 的所有 blob 断言不含原文**、未知 id 返回 not-found、非法 id 在到达 git 前拒绝）；`http-app` +2（确认必填与 `complete:false` 与 `404`；运行时副本随之清理）。`host.test` 路由清单加入 `/erase`。完整套件 **474/474 通过**（44 文件，三包全绿）。
 - 未验证：真实宿主上的端到端（`filter-branch` 在真实仓库规模下的耗时未测；测试里一次擦除约 18 秒，主要花在遍历校验上）；`filter-repo` 未安装，只能用 `filter-branch`（已弃用但仍可用）；面板尚无「彻底删除」入口（只有 API）；不可达范围里的「备份」没有任何实际清理机制。
+
+### 迭代 48（2026-11-09，修掉一个真实的测试竞态 + 面板补上隐私/置顶/彻底删除入口）
+- **诚实更正（先说这个）**：迭代 46 之后我在报告里把 `host.test.mjs` 的偶发退出码 1 记成「无法复现的瞬时现象」。本轮认真查了：**它是真竞态，约 1/8 概率触发**，只是需要跑 25 次才稳定看到。根因是测试自己：纠错路径是 fire-and-forget，`applyCorrection()` 先写入异议（`suppressedIds()` 立刻可见），而 `contextState.lastCorrection` 是在其后的 `.then()` 里才赋值；测试只轮询「异议可见」就去读 `dsh_memory_ping` 的 `injection.context`，于是可能读到 `null`。修：轮询同时等两个条件（异议可见 **且** probe 已报告纠错），并断言 probe 确实取到了。连跑 25 次 0 失败。**上一轮那句「未能复现」是错的，这里更正。**
+- 缺陷 19（面板无法设置隐私/置顶）：上一轮让 `sensitivity`/`pinned` 可写，但只有 API 入口。补：`client.js` 新增 `updateTraits()`，账本行新增「标记私密 / 取消私密」与「置顶 / 取消置顶」按钮，`ledgerView` 透出这两个字段（旧记录缺字段时 `sensitivity` 为 `null` 而非伪造 `'normal'`）。
+- 缺陷 20（只改隐私必须重发正文）：`POST /update` 原本无条件要求非空 `content`，账本 schema 的 UPDATE 也要求 `content`。于是「把这条标记为私密」只能连正文一起发回去，有改错正文的风险。修：`/update` 在给出 `sensitivity` 或 `pinned` 时允许省略 `content`（显式空字符串仍然 400 `empty`）；`validateProposal` 的 UPDATE 分支放宽为「要么有 content，要么有要改的属性」；`ledger.js` 的 UPDATE 用 `proposal.content ?? before.content`，**省略即保留正文**。
+- 缺陷 21（面板没有彻底删除入口）：补 `erase()` 客户端方法与账本行的「彻底删除」两段式确认，确认区先显示 `eraseWarning`（会重写 Git 历史、不可撤销、备份与已导出数据不在清理范围），成功提示直接采用 **Host 返回的 `message`**（它已写明哪些清不到），不自行简化成「已删除」。
+- 测试：`client-panels` +2（三种 trait 写入的确切请求体、未知值不转发、`confirm` 恒显式、12 条中文文案存在且警告含「备份/不可撤销」；`ledgerView` 透出两个字段且旧记录不伪造）；`http-app` +1（只改属性不动正文、显式空正文仍 400、两者都不给也 400）；`host.test` 竞态修复。完整套件 **477/477 通过**（44 文件，三包全绿）。
+- 未验证：浏览器里的实际渲染与交互（本轮全部是 Node 侧断言 + 假 React 渲染桩）；`filter-branch` 在真实仓库规模下的耗时；面板的「彻底删除」没有接入可达/不可达范围的**列表**展示，只在文案里说明。
