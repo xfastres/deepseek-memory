@@ -110,7 +110,11 @@ export function createInjectionRuntime(options = {}) {
   let lastObservePath = 'none';
   let probe = null;
   const injectionLog = createInjectionLog({ now });
-  let flushed = 0;
+  // Flush cursor: the highest record sequence already persisted, plus how many
+  // records have been handed over in total. Sequence-keyed because the log
+  // trims old entries, which would make an array index drift.
+  let flushedSeq = 0;
+  let flushedCount = 0;
   let constraintState = { usable: [], rejected: [], config: null, fallback: [], loaded: false };
 
   async function refresh() {
@@ -319,12 +323,26 @@ export function createInjectionRuntime(options = {}) {
     get agentCount() { return byAgent.size; },
     get snapshot() { return snapshot; },
     get constraints() { return constraintState; },
-    get log() { return { stats: () => ({ ...injectionLog.stats(), pending: injectionLog.records().length - flushed }), records: () => injectionLog.records() }; },
+    get log() { return { stats: () => ({ ...injectionLog.stats(), pending: this.pendingRecords().length }), records: () => injectionLog.records() }; },
     setConstraints(next) {
       constraintState = next ?? { usable: [], rejected: [], config: null, fallback: [], loaded: false };
     },
-    pendingRecords() { return injectionLog.records().slice(flushed); },
-    markFlushed(count) { flushed += Math.max(0, Number.isInteger(count) ? count : 0); },
+    pendingRecords() {
+      // Keyed on the record's own sequence, not its array position: the log
+      // trims its oldest entries, which would shift any positional cursor and
+      // make an already-flushed record look pending again (or the reverse).
+      return injectionLog.records().filter((record) => !Number.isInteger(record.seq) || record.seq > flushedSeq);
+    },
+    markFlushed(count) {
+      const added = Math.max(0, Number.isInteger(count) ? count : 0);
+      if (added === 0) return;
+      // Advance the cursor to the newest record actually handed over.
+      const pending = injectionLog.records().filter((record) => !Number.isInteger(record.seq) || record.seq > flushedSeq);
+      const last = pending[Math.min(added, pending.length) - 1];
+      if (last !== undefined && Number.isInteger(last.seq)) flushedSeq = last.seq;
+      else flushedSeq += added;
+      flushedCount += added;
+    },
     get lastInjection() { return injectionLog.records().slice(-1)[0] ?? null; },
     get latestObservation() { return latest; },
   };

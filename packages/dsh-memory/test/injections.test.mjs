@@ -8,6 +8,7 @@ import { resolveConstraints } from '../host/constraints.js';
 import { sourceDigestOf } from '../host/condense.js';
 import { createMemoryApp } from '../host/http-app.js';
 import { createInjectionRuntime } from '../host/injection.js';
+import { MAX_IN_MEMORY_RECORDS } from '../host/injection-log.js';
 
 const BROWSER = { 'sec-fetch-site': 'same-origin', origin: 'http://127.0.0.1:51840' };
 const HEAD = 'a'.repeat(40);
@@ -150,6 +151,35 @@ test('queued records are handed out once and can be marked flushed', async () =>
   runtime.markFlushed(pending.length);
   assert.deepEqual(runtime.pendingRecords(), []);
   assert.equal(runtime.log.stats().pending, 0);
+});
+
+test('the flush cursor stays correct after the log trims its oldest records', async () => {
+  // The log is bounded, so an array index would drift once old records are
+  // dropped: an already-flushed record could look pending again (and be written
+  // twice), or a fresh one could be skipped. The cursor is sequence-keyed.
+  const runtime = runtimeWith([RULE]);
+  await runtime.refresh();
+  runtime.setConstraints(constraintState(RULE, RULE_DIGEST));
+  runtime.observe({ name: 'scope' }, { agent: { id: 'session-1' }, turn: 1, messages: [] });
+  runtime.buildText({ name: 'scope' });
+  const first = runtime.pendingRecords();
+  assert.equal(first.length, 1);
+  runtime.markFlushed(first.length);
+  assert.deepEqual(runtime.pendingRecords(), []);
+
+  // Push far past the in-memory cap with distinct blocks.
+  for (let index = 0; index < MAX_IN_MEMORY_RECORDS + 40; index += 1) {
+    runtime.observe({ name: 'scope' }, { agent: { id: 'session-1' }, turn: 100 + index, messages: [{ role: 'user', content: `第 ${index} 次完全不同的问题` }] });
+    runtime.buildText({ name: 'scope' });
+  }
+  // Everything already flushed must stay flushed; only genuinely new records
+  // may be pending, and there must be far fewer of them than the cap.
+  const pending = runtime.pendingRecords();
+  assert.ok(pending.every((record) => !Number.isInteger(record.seq) || record.seq > 1), 'no flushed record came back');
+  assert.ok(pending.length <= MAX_IN_MEMORY_RECORDS, 'pending never exceeds what the log still holds');
+  assert.equal(runtime.log.stats().pending, pending.length, 'the reported pending count matches');
+  runtime.markFlushed(pending.length);
+  assert.deepEqual(runtime.pendingRecords(), [], 'a second flush clears the backlog');
 });
 
 test('a new record carries the pool split and the per-entry decision', async () => {

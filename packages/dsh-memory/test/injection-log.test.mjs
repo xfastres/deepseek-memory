@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildInjectionKey, createInjectionLog } from '../host/injection-log.js';
+import { buildInjectionKey, createInjectionLog, MAX_IN_MEMORY_RECORDS } from '../host/injection-log.js';
 
 const HEAD = 'a'.repeat(40);
 const AT = () => new Date('2026-10-28T08:00:00.000Z');
@@ -115,4 +115,55 @@ test('records carry first and last timestamps for repeated calls', () => {
   assert.equal(first.record.first_at, '2026-10-28T08:00:00.000Z');
   assert.equal(second.record.first_at, '2026-10-28T08:00:00.000Z', 'first_at does not move');
   assert.equal(second.record.last_at, '2026-10-28T08:00:01.000Z', 'last_at does');
+});
+
+test('a partial pools object is recorded as unknown, never thrown on', () => {
+  // This runs inside the prompt provider. A throw there is caught upstream and
+  // the provider returns an empty string, so the whole memory block silently
+  // vanishes from that turn - the audit row was taking the feature down with it.
+  const log = createInjectionLog({ now: AT });
+  const shapes = [
+    {},
+    { constraint: {} },
+    { dynamic: {} },
+    { constraint: null },
+    { constraint: { budget: 1 } },
+    { constraint: { budget: 240, used: 100 } },
+    'nonsense',
+    null,
+  ];
+  shapes.forEach((pools, index) => {
+    const { record } = log.note(entry({ text: `block ${index}`, pools }));
+    // Anything without at least one usable number is "unknown", not a guess.
+    const constraint = pools !== null && typeof pools === 'object' && pools.constraint !== null && typeof pools.constraint === 'object' ? pools.constraint : null;
+    const dynamic = pools !== null && typeof pools === 'object' && pools.dynamic !== null && typeof pools.dynamic === 'object' ? pools.dynamic : null;
+    const hasNumber = (pool) => pool !== null && (Number.isFinite(pool.budget) || Number.isFinite(pool.used));
+    if (!hasNumber(constraint) && !hasNumber(dynamic)) {
+      assert.equal(record.pools, null, `pools=${JSON.stringify(pools)} is recorded as unknown`);
+    } else {
+      assert.ok(record.pools !== null, `pools=${JSON.stringify(pools)} keeps what it had`);
+    }
+  });
+  // A complete split is still recorded exactly.
+  const { record } = log.note(entry({ text: 'full', pools: { constraint: { budget: 240, used: 100 }, dynamic: { budget: 560, used: 40 } } }));
+  assert.deepEqual(record.pools, { constraint: { budget: 240, used: 100 }, dynamic: { budget: 560, used: 40 } });
+});
+
+test('the in-memory log is bounded, and its sequence numbers stay monotonic', () => {
+  // Every provider call used to add a record that was never released, so a long
+  // session grew the Host heap for as long as it ran. Persisted records are the
+  // audit trail; the in-memory list only needs the unflushed tail.
+  const log = createInjectionLog({ now: AT });
+  const total = MAX_IN_MEMORY_RECORDS + 250;
+  for (let index = 1; index <= total; index += 1) {
+    log.note(entry({ turn: index, text: `block ${index}` }));
+  }
+  const stats = log.stats();
+  assert.equal(stats.records, MAX_IN_MEMORY_RECORDS, 'the cap is honoured');
+  assert.equal(stats.dropped, total - MAX_IN_MEMORY_RECORDS, 'drops are counted, not silent');
+  assert.equal(stats.calls, total, 'calls are still counted in full');
+
+  const kept = log.records();
+  assert.equal(kept.at(-1).seq, total, 'the newest record keeps its true sequence');
+  assert.ok(kept.every((record, index) => index === 0 || record.seq > kept[index - 1].seq), 'sequence stays monotonic');
 });

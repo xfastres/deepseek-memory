@@ -1264,3 +1264,11 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 测试：`ledger-service` +2、改 1（原先断言「账本还没有 private 标记，缺失即缺失」——那是把缺口写成了预期，现改为断言中性默认值，并新增「可写入 / 编辑不改 / 显式可改 / 未知值拒绝且零写入」）；`retrieval` +1（用账本形状的行验证 private 被排除且给出 `private` 原因、pinned 在零词面命中时仍进入、无关普通记忆不进入、`includePrivate` 仍需显式开启）。完整套件 **460/460 通过**（43 文件，三包全绿）；三个新用例在旧 schema/ledger 上确认失败。
 - 说明：这是**数据格式扩展**，不是行为回归修复。旧记录不含这两个字段，`validateMemory` 会补上中性默认值，读取行为与之前一致（private 仍不触发，因为旧记录本就没有标记）；不需要迁移脚本。
 - 未验证：真实宿主端到端；面板尚未提供 private / 置顶的输入控件（API 与账本已可用，UI 入口未接）；`pinned` 目前只影响打分与预算旁路，没有「置顶但内容质量不合格」之类的额外约束。
+
+### 迭代 44（2026-11-09，注入审计链：部分 pools 崩溃、内存无界增长）
+- 依据：`roadmap §9.3`（记录会话/轮次/分项得分与理由）、`§1.1`（任何记忆功能失败不得阻塞对话）。本轮只修缺陷。
+- 缺陷 17（部分 `pools` 让整块记忆从 prompt 消失）：`injection-log.js` 的 `note()` 先判 `pools` 是对象，随后直接读 `pools.constraint.budget` 与 `pools.dynamic.budget`。任何不完整的形状（`{}`、`{constraint:{}}`、`{dynamic:{}}`、`{constraint:null}`、`{constraint:{budget:1}}`）都抛 `TypeError`。这个函数在 prompt provider 内运行，`index.js` 的 `try/catch` 会吞掉异常并 `return ''`——**审计行写不进去是小事，整轮记忆注入被清空才是真损失**。修：抽出 `readPool`/`readPools`，缺字段记为 `null`（未知），不猜；至少一个可用数字才成对象。实测八种形状全部不再抛，完整形状仍原样保留。
+- 缺陷 18（内存无界增长）：`createInjectionLog` 把每次 provider 调用都追加进 `records` 数组，永不释放；`records()` 每次 `slice()` 全量复制，而 `pendingRecords()`（每个 step 边界调用）与 `lastInjection` 都走它。长会话下 Host 堆只增不减。持久化审计走的是 runtime store（`/injections` 读那边），内存里只需要「尚未 flush 的尾部」。修：新增 `MAX_IN_MEMORY_RECORDS = 500`，超出时丢弃最旧的并同步清理 `byKey`；新增 `stats().dropped` 计数，丢弃不静默。实测 1200 次注入后保留 500、dropped 700、堆 5.9 MB（原来 1200 条全留）。
+- 连带修复（本轮改动的必要条件）：`injection.js` 的 flush 游标原本是数组下标 `flushed`。日志开始裁剪后，下标会漂移——已 flush 的记录可能重新看起来是 pending（**会被重复写入持久化审计**），或新记录被跳过。改为按记录自增的 `seq` 定位，`pendingRecords()` 用 `seq > flushedSeq` 过滤，`markFlushed` 把游标推进到真正交出去的最后一条。`injection-log` 每条记录新增 `seq`（`dropped + length + 1`，裁剪后仍单调）。
+- 测试：`injection-log` +2（八种 pools 形状不抛且未知记为 null；1200 次注入后条数封顶、dropped 计数正确、seq 仍单调）；`injections` +1（flush 后灌入超过上限的记录，断言已 flush 的不复活、pending 不超上限、二次 flush 清空）。完整套件 **463/463 通过**（43 文件，三包全绿）。两个缺陷都在旧代码上用探针脚本确认：旧 `note()` 抛 `TypeError` 且 `records` 为 0；旧实现 1200 次注入保留 1200 条。
+- 未验证：真实宿主长会话的实际堆占用（本地为合成压测）；`MAX_IN_MEMORY_RECORDS=500` 这个值是否与真实 step 频率匹配（当前远高于任何合理的未 flush 积压）；浏览器面板「注入追踪」在裁剪后是否仍显示足够历史（它读 `/injections`，即持久化数据，不受影响）。

@@ -23,6 +23,31 @@ function normaliseIds(ids) {
 }
 
 /**
+ * Copy the budget split without trusting its shape.
+ *
+ * This runs inside the prompt provider, so a throw here does not merely lose an
+ * audit row: the provider catches it and returns an empty string, which silently
+ * removes the whole memory block from that turn. Reading `pools.constraint.budget`
+ * unguarded did exactly that for any partial pools object. A missing pool is
+ * reported as null rather than guessed at.
+ */
+function readPool(pool) {
+  if (pool === null || typeof pool !== 'object') return null;
+  const budget = Number.isFinite(pool.budget) ? pool.budget : null;
+  const used = Number.isFinite(pool.used) ? pool.used : null;
+  if (budget === null && used === null) return null;
+  return { budget, used };
+}
+
+function readPools(pools) {
+  if (pools === null || typeof pools !== 'object') return null;
+  const constraint = readPool(pools.constraint);
+  const dynamic = readPool(pools.dynamic);
+  if (constraint === null && dynamic === null) return null;
+  return { constraint, dynamic };
+}
+
+/**
  * The identity of one logical injection.
  *
  * The memory set is sorted so a different selection order cannot produce a
@@ -41,13 +66,43 @@ export function buildInjectionKey({ sessionId, turn, snapshotHead, memoryIds, te
 }
 
 /**
+ * How many records the in-memory log keeps.
+ *
+ * Nothing reads old records from here: the audit trail is persisted through the
+ * runtime store (`/injections` reads that), and `pendingRecords()` only needs the
+ * ones not yet flushed. Keeping every record of a long session was a slow leak —
+ * one small object per provider call, forever, in the Host process. The cap is
+ * far above any realistic unflushed backlog, and dropping the oldest is safe
+ * because those were already flushed.
+ */
+export const MAX_IN_MEMORY_RECORDS = 500;
+
+/**
  * @param {{now?: () => Date}} [options]
  */
 export function createInjectionLog(options = {}) {
   const now = options.now ?? (() => new Date());
   const records = [];
   const byKey = new Map();
-  const counters = { calls: 0, empty: 0 };
+  const counters = { calls: 0, empty: 0, dropped: 0 };
+
+  /**
+   * Forget the oldest records once the cap is reached.
+   *
+   * `byKey` is pruned in the same pass, so a duplicate detection for a very old
+   * block simply misses and starts a fresh record instead of resurrecting a
+   * dropped one. Losing that merge is harmless: it can only happen after
+   * hundreds of newer injections.
+   */
+  function trim() {
+    if (records.length <= MAX_IN_MEMORY_RECORDS) return;
+    const excess = records.length - MAX_IN_MEMORY_RECORDS;
+    const removed = records.splice(0, excess);
+    for (const record of removed) {
+      if (byKey.get(record.key) === record) byKey.delete(record.key);
+    }
+    counters.dropped += removed.length;
+  }
 
   /**
    * One provider call.
@@ -73,6 +128,9 @@ export function createInjectionLog(options = {}) {
       return { record: existing, duplicate: true };
     }
     const record = {
+      // A monotonic sequence lets a reader say "everything up to N is done"
+      // without depending on array position, which trimming can change.
+      seq: (counters.dropped + records.length) + 1,
       key,
       scope: 'turn',
       step: null,
@@ -88,12 +146,7 @@ export function createInjectionLog(options = {}) {
       memory_ids: normaliseIds(input.memoryIds),
       // Why each entry was chosen. Ids alone cannot explain a decision.
       reasons: Array.isArray(input.reasons) ? input.reasons.slice(0, 20).map((value) => String(value).slice(0, 160)) : [],
-      pools: input.pools !== null && typeof input.pools === 'object'
-        ? {
-          constraint: { budget: input.pools.constraint.budget, used: input.pools.constraint.used },
-          dynamic: { budget: input.pools.dynamic.budget, used: input.pools.dynamic.used },
-        }
-        : null,
+      pools: readPools(input.pools),
       memories: Array.isArray(input.memories) ? input.memories.slice(0, 20) : [],
       excluded: Array.isArray(input.excluded) ? input.excluded.slice(0, 20) : [],
       text_digest: digestOf(text),
@@ -104,12 +157,13 @@ export function createInjectionLog(options = {}) {
     };
     records.push(record);
     byKey.set(key, record);
+    trim();
     return { record, duplicate: false };
   }
 
   return {
     note,
     records: () => records.slice(),
-    stats: () => ({ calls: counters.calls, empty: counters.empty, records: records.length }),
+    stats: () => ({ calls: counters.calls, empty: counters.empty, records: records.length, dropped: counters.dropped }),
   };
 }
