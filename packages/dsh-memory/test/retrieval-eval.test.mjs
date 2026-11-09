@@ -12,6 +12,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { selectMemories } from '../host/retrieval.js';
+import { RETRIEVAL_CASES, SEARCH_PARITY_QUERIES, retrievalCorpus } from '../eval/retrieval-cases.mjs';
+import { evaluateRetrieval, evaluateSearchParity } from '../eval/retrieval-eval.mjs';
 
 const now = () => new Date('2026-10-28T08:00:00.000Z');
 
@@ -79,6 +81,47 @@ test('most realistic queries put their memory first', () => {
   }
   const hit = CASES.length - misses.length;
   assert.ok(hit / CASES.length >= 0.8, `recall@1 ${hit}/${CASES.length}: ${JSON.stringify(misses, null, 2)}`);
+});
+
+test('the evaluation set holds the hard rule: nothing forbidden is ever injected', () => {
+  // §9.2 and §13.2: retracted, private and inferred material must reach the
+  // block zero times. This is the one metric with a hard target, so it is a
+  // gate; the other numbers are measurements and live in the CLI.
+  const result = evaluateRetrieval({ corpus: retrievalCorpus(), cases: RETRIEVAL_CASES });
+  assert.equal(result.forbiddenInjections, 0, `forbidden material reached the block: ${JSON.stringify(result.rows.filter((row) => row.forbidden.length > 0))}`);
+  // And the corpus really does contain such material, so the check is not vacuous.
+  const corpus = retrievalCorpus();
+  assert.ok(corpus.some((memory) => memory.status === 'retracted'));
+  assert.ok(corpus.some((memory) => memory.sensitivity === 'private'));
+  assert.ok(corpus.some((memory) => memory.type === 'hypothesis'));
+});
+
+test('the evaluation set keeps its measured recall floor', () => {
+  // A weight change that breaks recall should fail here and name the query.
+  // The floor is below the current 94.7% so ordinary tuning has room, but high
+  // enough that a real regression cannot pass.
+  const result = evaluateRetrieval({ corpus: retrievalCorpus(), cases: RETRIEVAL_CASES });
+  const misses = result.rows.filter((row) => row.expect !== null && (row.position === -1 || row.position >= 5));
+  assert.ok(
+    result.recallAt5 >= 0.9,
+    `recall@5 ${(result.recallAt5 * 100).toFixed(1)}% is below the 90% floor; misses: ${JSON.stringify(misses.map((row) => ({ query: row.query, expect: row.expect, top: row.top })))}`,
+  );
+  assert.ok(result.recallAt1 >= 0.65, `recall@1 ${(result.recallAt1 * 100).toFixed(1)}% is below the 65% floor`);
+});
+
+test('a query with no relevant memory keeps the block empty', () => {
+  const result = evaluateRetrieval({ corpus: retrievalCorpus(), cases: RETRIEVAL_CASES });
+  for (const row of result.rows.filter((entry) => entry.expect === null)) {
+    assert.equal(row.injected, 0, `"${row.query}" should inject nothing, got ${JSON.stringify(row.top)}`);
+  }
+});
+
+test('memory_search never exposes what injection would hide', () => {
+  // §11: the tool shares the injector's window. A memory the injector refuses
+  // must not be findable through the tool either.
+  const parity = evaluateSearchParity({ corpus: retrievalCorpus(), queries: SEARCH_PARITY_QUERIES });
+  assert.deepEqual(parity.leaks, [], 'search leaked hidden material');
+  assert.ok(parity.queries > 0, 'the parity check ran on real queries');
 });
 
 test('a query matching nothing keeps the block small instead of dumping the store', () => {
