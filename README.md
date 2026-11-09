@@ -227,7 +227,7 @@ node packages/dsh-memory/eval/run-extraction-eval.mjs
 
 阶段 1 安全边界验收时：插件约 400、账本 31、L0 7。只读审计基线（414）见 [phase0](docs/status/phase0-readonly-audit.md)。以当时 `node --test` 输出为准。
 
-当前总计 **449 项通过**（43 个测试文件，三包全绿）。
+当前总计 **460 项通过**（43 个测试文件，三包全绿）。
 
 ## 设计约束
 
@@ -246,8 +246,9 @@ node packages/dsh-memory/eval/run-extraction-eval.mjs
 - 正式记忆目前都是 `global` scope，没有 workspace 隔离
 - L2/L3 纯函数已有（`host/scenarios.js`、`host/persona.js`），界面尚未挂上
 - `MemoryWriter` 的 gated ADD 已实现，默认 `writesEnabled: false`，生产 HTTP 仍走加固后的旧入口，尚未切到统一写入路径
-- `POST /settings` 是无锁的读-改-写；两个并发请求会互相覆盖（写入串行化或基线版本尚未实现）
+- `sensitivity` / `pinned` 现在**能写入也能读取**（账本、检索闸门都已生效），但面板还没有对应的输入控件，目前只能经 API 设置
 - 撤回与「彻底删除」仍未分开：`RETRACT` 保留 Git 历史，隐私删除（重写历史、清理索引/导出/日志副本）尚未实现（roadmap §8.3 / 阶段 5.4）
+- SQLite FTS5 只做了可用性探测（`dsh_memory_ping` 会报 `trigram` 是否可用），检索仍走内存词面评分；roadmap §9.1 的 FTS5 + BM25 尚未接入
 
 阶段 0 审计见 [phase0-readonly-audit.md](docs/status/phase0-readonly-audit.md)。阶段 1 写围栏、证据闸门、抑制 fail-closed 的修复与活体验收见 [phase1-security-boundary-report.md](docs/status/phase1-security-boundary-report.md) 和 [phase1-acceptance-report.md](docs/status/phase1-acceptance-report.md)。
 
