@@ -77,6 +77,22 @@ export function isOpenCandidateStatus(status) {
 export const MAX_INJECTIONS = 200;
 export const INJECTION_MAX_AGE_DAYS = 30;
 /**
+ * Caps for the settled half of each runtime collection.
+ *
+ * Only entries that are already finished are ever dropped: a candidate that has
+ * been accepted or rejected, a resolved objection, a proposal the user already
+ * answered. Anything still actionable is kept no matter how old it is, because
+ * dropping it would silently cancel a decision the user has not made yet.
+ *
+ * These exist because every mutation rewrites the whole runtime.json, so an
+ * uncapped collection is a per-write cost that grows forever. The limits are
+ * generous: they only bite after hundreds of settled entries.
+ */
+export const MAX_SETTLED_CANDIDATES = 500;
+export const MAX_RESOLVED_OBJECTIONS = 500;
+export const MAX_SETTLED_PROPOSALS = 500;
+export const SETTLED_MAX_AGE_DAYS = 90;
+/**
  * Where a candidate came from. Additive field: an absent or unknown origin is
  * stored as null so old documents keep loading and nothing is invented.
  */
@@ -198,7 +214,8 @@ export function createRuntimeStore(options = {}) {
   }
 
   function prune(document) {
-    const cutoff = now().getTime() - INJECTION_MAX_AGE_DAYS * 86_400_000;
+    const nowMs = now().getTime();
+    const cutoff = nowMs - INJECTION_MAX_AGE_DAYS * 86_400_000;
     document.injections = document.injections.filter((entry) => {
       const at = Date.parse(entry?.at);
       return Number.isNaN(at) ? false : at >= cutoff;
@@ -206,6 +223,44 @@ export function createRuntimeStore(options = {}) {
     if (document.injections.length > MAX_INJECTIONS) {
       document.injections = document.injections.slice(document.injections.length - MAX_INJECTIONS);
     }
+
+    // Settled entries are dropped oldest-first, and only once they are both
+    // finished and past the age cut. Open work is never touched: a candidate
+    // still awaiting review or an unresolved objection is a decision the user
+    // has not made yet, and removing it would quietly answer for them.
+    const settledCutoff = nowMs - SETTLED_MAX_AGE_DAYS * 86_400_000;
+    const settledAt = (entry) => {
+      const stamp = Date.parse(entry?.reviewed_at ?? entry?.resolved_at ?? entry?.updated_at ?? entry?.created_at ?? entry?.at);
+      return Number.isNaN(stamp) ? 0 : stamp;
+    };
+    const bound = (list, isSettled, max) => {
+      const kept = [];
+      const settled = [];
+      for (const entry of list) {
+        if (isSettled(entry)) settled.push(entry);
+        else kept.push(entry);
+      }
+      const fresh = settled.filter((entry) => settledAt(entry) >= settledCutoff);
+      const overflow = fresh.length > max ? fresh.slice(fresh.length - max) : fresh;
+      // Preserve the original relative order of what survives.
+      const survivors = new Set(overflow);
+      return list.filter((entry) => !isSettled(entry) || survivors.has(entry));
+    };
+    document.candidates = bound(
+      document.candidates,
+      (entry) => !isOpenCandidateStatus(entry?.status),
+      MAX_SETTLED_CANDIDATES,
+    );
+    document.objections = bound(
+      document.objections,
+      (entry) => entry?.status !== 'active',
+      MAX_RESOLVED_OBJECTIONS,
+    );
+    document.proposals = bound(
+      document.proposals,
+      (entry) => entry?.status !== 'open',
+      MAX_SETTLED_PROPOSALS,
+    );
   }
 
   return {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { createRuntimeStore, listTemporaryFiles } from '../host/runtime-store.js';
+import { createRuntimeStore, listTemporaryFiles, MAX_SETTLED_CANDIDATES } from '../host/runtime-store.js';
 
 const REF = { session_id: 'session-a', event_seq: 4, event_type: 'user/message' };
 
@@ -131,6 +131,31 @@ test('re-recording the same logical injection merges instead of duplicating', as
     // A genuinely different key is a different injection.
     await store.recordInjection({ ...record, key: 'sha256:def' });
     assert.equal((await store.listInjections({ limit: 50 })).length, 4);
+  });
+});
+
+test('settled entries are bounded, but open work is never pruned', async () => {
+  // Every mutation rewrites the whole runtime.json, so an uncapped collection is
+  // a per-write cost that grows forever. Only finished entries may be dropped:
+  // a candidate still awaiting review is a decision the user has not made, and
+  // removing it would quietly answer for them.
+  await withRoot(async (root) => {
+    const store = createRuntimeStore({ root });
+    const ref = { session_id: 's1', event_seq: 1 };
+    const settled = MAX_SETTLED_CANDIDATES + 30;
+    for (let index = 0; index < settled; index += 1) {
+      const candidate = await store.addCandidate({ text: `候选 ${index}：这是一条足够长的候选内容。`, type: 'fact', sourceRef: ref });
+      await store.setCandidateStatus(candidate.id, 'rejected');
+    }
+    const open = await store.addCandidate({ text: '仍然开放、等待用户决定的那一条。', type: 'fact', sourceRef: ref });
+
+    const list = await store.listCandidates();
+    assert.ok(list.some((entry) => entry.id === open.id), 'the open candidate survives');
+    const openCount = list.filter((entry) => ['proposed', 'validating', 'review_pending', 'conflict'].includes(entry.status)).length;
+    assert.equal(openCount, 1, 'no open candidate was dropped');
+    const rejected = list.filter((entry) => entry.status === 'rejected').length;
+    assert.ok(rejected <= MAX_SETTLED_CANDIDATES, `settled candidates are capped, got ${rejected}`);
+    assert.ok(rejected > 0, 'the cap keeps the newest settled entries rather than clearing them');
   });
 });
 
