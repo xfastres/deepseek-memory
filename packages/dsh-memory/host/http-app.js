@@ -356,26 +356,54 @@ export function createMemoryApp(options = {}) {
         if (typeof body.memoryId !== 'string' || body.memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
         if (content === '') { writeJson(res, 400, { ok: false, error: 'empty' }); return; }
         if (!requireBaseChangeId(body.expectedBaseChangeId, res)) return;
+        // An UPDATE may cite the session event that prompted it, but the panel's
+        // edit flow has no such event (the user typed in a form). The service
+        // therefore verifies the *effective* evidence: the new refs when given,
+        // otherwise the refs the memory already carries. Either way something
+        // real is checked — see ledger-service.apply.
+        let ref = body.sourceRef;
+        if (ref === undefined && body.sessionId !== undefined && body.turn !== undefined) {
+          const resolved = await resolveSafe(body.sessionId, body.turn);
+          if (resolved.error !== undefined) {
+            writeJson(res, 422, { ok: false, error: 'no-evidence', reason: resolved.error });
+            return;
+          }
+          ref = resolved.ref;
+        }
         const result = await service.update({
           memoryId: body.memoryId,
           content,
           expectedBaseChangeId: body.expectedBaseChangeId,
+          sourceRefs: ref === undefined ? undefined : [ref],
           tags: body.tags,
           entities: body.entities,
         });
         // The new wording answers the objection (§6.5): the user may ask for it
         // to be cleared in the same request, so the memory is not left hidden
         // after they fixed it. A memory with no objection is not an error.
+        //
+        // The commit has already landed by this point, so a failure here must
+        // not turn a successful write into an error response: the caller would
+        // retry with a base id that is now stale and get a 409 for work that
+        // succeeded. Report `objection_cleared: false` and let the panel retry
+        // the clear on its own.
         let cleared = false;
+        let clearError = null;
         if (body.clearObjection === true) {
           try {
             await runtime.reinstate(body.memoryId);
             cleared = true;
           } catch (error) {
-            if (!(error !== null && typeof error === 'object' && error.code === 'missing')) throw error;
+            const code = error !== null && typeof error === 'object' && typeof error.code === 'string' ? error.code : null;
+            if (code === 'missing') {
+              // Nothing was objected to: not an error, and not a clear.
+              cleared = false;
+            } else {
+              clearError = code ?? 'failed';
+            }
           }
         }
-        writeJson(res, 200, { ok: true, ...result, objection_cleared: cleared });
+        writeJson(res, 200, { ok: true, ...result, objection_cleared: cleared, ...(clearError === null ? {} : { objection_clear_error: clearError }) });
       } catch (error) {
         fail(res, error);
       }
@@ -390,9 +418,22 @@ export function createMemoryApp(options = {}) {
         const body = await readJsonBody(req);
         if (typeof body.memoryId !== 'string' || body.memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
         if (!requireBaseChangeId(body.expectedBaseChangeId, res)) return;
+        // Same rule as /update: a RETRACT may cite the event that prompted it,
+        // and when it does not, the service verifies the refs the memory already
+        // carries rather than skipping the check.
+        let ref = body.sourceRef;
+        if (ref === undefined && body.sessionId !== undefined && body.turn !== undefined) {
+          const resolved = await resolveSafe(body.sessionId, body.turn);
+          if (resolved.error !== undefined) {
+            writeJson(res, 422, { ok: false, error: 'no-evidence', reason: resolved.error });
+            return;
+          }
+          ref = resolved.ref;
+        }
         const result = await service.retract({
           memoryId: body.memoryId,
           expectedBaseChangeId: body.expectedBaseChangeId,
+          sourceRefs: ref === undefined ? undefined : [ref],
           reason: typeof body.reason === 'string' ? body.reason : undefined,
         });
         writeJson(res, 200, { ok: true, ...result });
@@ -429,6 +470,14 @@ export function createMemoryApp(options = {}) {
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
+        // The candidate text becomes a memory's content, so it must be a string.
+        // The store coerced it with String(), which turned `text: 123` into the
+        // candidate "123" and `text: {}` into "[object Object]" — junk that a
+        // reviewer could accept straight into the ledger.
+        if (typeof body.text !== 'string' || body.text.trim() === '') {
+          writeJson(res, 400, { ok: false, error: 'empty' });
+          return;
+        }
         let ref = body.sourceRef;
         if (ref === undefined && typeof body.sessionId === 'string' && Number.isInteger(body.turn)) {
           const resolved = await resolveSafe(body.sessionId, body.turn);
@@ -476,6 +525,14 @@ export function createMemoryApp(options = {}) {
         }
         if (body.action === 'accept') {
           if (!ensureEvidenceAvailable(res)) return;
+          // Only a candidate still awaiting a decision may be accepted. Accepting
+          // one that is already settled hits the idempotency receipt, which
+          // replays the original commit and returns 200 — so an edited `content`
+          // was silently discarded while the panel reported success (§8.2 "不静默覆盖").
+          if (!isOpenCandidateStatus(candidate.status)) {
+            writeJson(res, 409, { ok: false, error: 'not-open', status: candidate.status ?? null });
+            return;
+          }
           const content = typeof body.content === 'string' && body.content.trim() !== '' ? body.content.trim() : candidate.text;
           // Older candidates may still carry a rule kind the ledger does not
           // know; refusing here beats returning an opaque schema error.

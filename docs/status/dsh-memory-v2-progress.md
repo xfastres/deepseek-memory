@@ -1222,3 +1222,19 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 实现：`host/runtime-store.js` 的 `addProposal` 只在 `action === 'add'` 且给出 `type` 时做映射；映射失败抛 `invalid-type`，提案不写入。`update`/`merge`/`retract` 不改目标记忆的类型，随附的 `type` 记为 `null` 而不是报错，避免把「我想改这句话」误判成类型错误。`memory_propose` 已把 `error.code` 原样返回，所以工具侧自动得到 `{ ok: false, error: 'invalid-type' }`，无需改工具。
 - 测试：`proposals.test` 扩断言（`instruction` → `constraint`；`gossip` 的 add 被拒且列表中不存在；update 带 `gossip` 仍可建立且 `type` 为 `null`）；工具测试用真实 `createRuntimeStore` 证明 `memory_propose` 返回 `invalid-type`。`proposals` + `http-app` 37/37 通过。
 - 未验证：真实运行时提案文件里是否已有旧的非法类型 `add` 提案（若有，接受时仍由 Writer 的 schema 拒绝，提案保持 open；本轮不迁移历史文件）。
+
+### 迭代 40（2026-11-09，缺陷排查：注入重复、账本读取放大、提案面板失效、证据闸门空转）
+- 依据：`roadmap §5.1`（证据规则）、`§8.2`（不静默覆盖）、`§10.2`（单条记忆操作）、`§7.3`（写入基线）、`§9.3`（注入预算与可解释性）。本轮不新增功能，只修真实缺陷：每个缺陷都先用探针脚本复现，再改代码，最后用「在旧代码上必然失败」的回归测试锁住。
+- 缺陷 1（注入重复）：`selectMemories` 的两个池互相独立，一条被配置为常驻约束的记忆既以摘要进池一、又以全文进池二，模型把同一句话读成两条，预算也被计两次。修：池二跳过**已入选**的约束记忆并记 `already-a-constraint`；被拒的约束（摘要过期/超长/为空）不跳过，避免坏摘要连带吞掉记忆本身。测试 +2（两个方向）。
+- 缺陷 2（账本读取放大）：`ledger-service.listMemories` 对每条记忆各跑一次 `git log`（`history()`）取版本号，`state()` 因此是 O(N) 次进程派生。实测 12 条记忆 `state()` 约 4.3 秒，而它位于每轮对话的注入刷新之前。修：版本号改为一次 `git log --name-only -- records/` 统计；记录正文改为一次 `git cat-file --batch`（`GitRepo.showMany`，按**字节**切分，UTF-8 正文的字节数≠字符数）。实测 12 条降到约 0.45 秒，20 条验证 `state().version === history().length` 逐条一致。
+- 缺陷 3（提案面板整体失效）：`proposalView` 读 `target.text` / `target.changeId`，而 `probeHost` 传给它的是 `GET /state` 的原始行（`content` / `last_change_id`）。于是「修改前」为空、`changeId` 为 null，`reviewProposalRow` 对每个非 add 提案都判 `proposalStale`——接受按钮永远失败。原测试喂的是 `ledgerView` 的输出（已重映射），所以从未覆盖真实形状。修：按 Host 字段名读取，并兼容两种形状。测试 +2（真实形状 + 缺失目标）。
+- 缺陷 4（同一处闭包过期）：`probeHost` 在调用 `setLedger` 的同一 tick 调 `loadProposals()`，闭包里的 `ledger` 仍是挂载时的空数组，所有定向提案都被判「目标不存在」。修：把刚收到的行作为参数传入。
+- 缺陷 5（错误被改写）：`readResponse` 在解析响应体前把**所有** 404 映射成 `not-mounted`，于是 Host 明确回 `{error:'missing'}`（记忆已删除）时，面板说「插件未挂载」，`missingMemory` 文案成了死代码。修：先读响应体，有 `error` 就用它，没有才判 `not-mounted`。
+- 缺陷 6（设置面板丢字段）：面板把 `/settings` 重建成 `{enabled, autoAccept}`，丢掉 `autoAcceptTypes`、`choices`、`fallback`。丢掉 `fallback` 让「设置文件读不出来、已回退默认值」看起来像用户自己选的。修：抽出 `readSettingsPayload` 供读/写共用（一份形状定义，避免再次分叉），并在面板显示生效类型与回退诊断。
+- 缺陷 7（计数说谎）：账本标题用 `shownLedger.length`（上限 20），200 条记忆的账本显示「20 条」。修：用 Host 的 `host.count`，被截断时明确写「共 N 条，显示前 M 条」。
+- 缺陷 8（证据闸门空转，最严重）：`/update` 与 `/retract` 从不传 `sourceRefs`，而 `verify([])` 因为「空集合全称命题为真」返回 `verified: true`。于是这两个正式写入在**零条已核验证据**的情况下落库，代码却以为校验过了。修：`verify()` 对空/非对象列表返回 `{verified:false, reason:'no-refs'}`；`ledger-service.apply` 对 RETRACT 等无自带 ref 的变更，改为核验**被改记忆自己的** `source_refs`，两者都没有才拒绝；并把真正核验过的 ref 写回变更记录，避免历史里留下「对空集已核验」。`/update`、`/retract` 支持可选 `sourceRef` 或 `sessionId`+`turn`。测试 +2。
+- 缺陷 9（静默覆盖）：`/review` 接受候选时不看 `candidate.status`，重复接受命中幂等 receipt，返回 200 且把**原始**提交回放，新传的 `content` 被静默丢弃。修：非开放状态返回 `409 not-open`。测试 +1。
+- 缺陷 10（类型强转）：`/candidate` 把 `body.text` 交给 `String()`，`text:123` 入队为 `"123"`、`text:{}` 入队为 `"[object Object]"`，审核者可把它接受成正式记忆。修：非字符串或空白直接 `400 empty`。测试 +1。
+- 缺陷 11（并发覆盖）：`openHistory` / `openEvidence` 无请求代次保护，先点 A 再点 B 时，A 的迟到响应会覆盖 B 的结果，面板显示的版本/证据属于另一条记忆。修：加 `useRef` 代次守卫，过期响应直接丢弃。顺带补上离线重置漏掉的 `reviewPending` 字段（潜在 `undefined.includes`）。
+- 测试：新增 11 项回归（注入 2、提案 2、404/计数/设置 3、证据 2、候选 2），完整套件 **449/449 通过**（43 个文件，三包全绿）。每个关键回归都用 `git stash` 在旧代码上验证过「确实失败」，不是只在新代码上通过。
+- 未验证：真实 DSH 宿主里的端到端表现（本轮全部为 Node 侧单元/集成测试与探针脚本）；浏览器里的面板视觉与交互；`state()` 优化在真实仓库规模（数百条）下的实际耗时；`/settings` 并发写仍是无锁读-改-写（审计发现，未在本轮修改，属数据格式/并发策略决策）。

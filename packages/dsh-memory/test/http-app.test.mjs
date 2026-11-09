@@ -845,6 +845,77 @@ test('a proposal is listed, and only the user can accept it', async () => {
   });
 });
 
+test('a settled candidate cannot be accepted again with different text', async () => {
+  // Regression: /review accept had no status check, so re-accepting a settled
+  // candidate hit the idempotency receipt, replayed the ORIGINAL commit and
+  // answered 200. An edited `content` was silently discarded while the panel
+  // reported success (§8.2 "不静默覆盖").
+  await withApp(async (dir) => {
+    // A real event log, so the candidate's ref genuinely verifies: this test is
+    // about the status check, not about evidence.
+    const log = [
+      { seq: 1, type: 'turn/start' },
+      { seq: 2, type: 'user/message', data: { content: '记住：我偏好简洁回答' } },
+    ];
+    const app = testApp(dir, {
+      sessionQuery: {
+        listEvents: async () => log,
+        readEvent: async (_id, seq) => {
+          const event = log.find((entry) => entry.seq === seq);
+          return event === undefined ? undefined : { target: { data: event.data } };
+        },
+      },
+    });
+    const headers = await writeHeaders(app);
+    const queued = await call(app, '/api/dsh-memory/candidate', {
+      method: 'POST', headers,
+      body: { text: '用户偏好简洁回答', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    assert.equal(queued.status, 200);
+    const candidateId = queued.json.candidate.id;
+
+    const first = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers,
+      body: { candidateId, action: 'accept' },
+    });
+    assert.equal(first.status, 200);
+    assert.equal((await call(app, '/api/dsh-memory/state')).json.memories[0].content, '用户偏好简洁回答');
+
+    // The second accept carries different text. It must be refused, not replayed.
+    const again = await call(app, '/api/dsh-memory/review', {
+      method: 'POST', headers,
+      body: { candidateId, action: 'accept', content: '完全不同的说法' },
+    });
+    assert.equal(again.status, 409);
+    assert.equal(again.json.error, 'not-open');
+    const state = await call(app, '/api/dsh-memory/state');
+    assert.equal(state.json.memories.length, 1, 'the refused accept wrote nothing');
+    assert.equal(state.json.memories[0].content, '用户偏好简洁回答', 'the settled wording was not overwritten');
+  });
+});
+
+test('a candidate text that is not a string is refused instead of coerced', async () => {
+  // Regression: the store ran String(input.text), so text:123 queued "123" and
+  // text:{} queued "[object Object]" — junk a reviewer could accept into the
+  // ledger as a formal memory.
+  await withApp(async (dir) => {
+    const app = testApp(dir, {
+      sessionQuery: { listEvents: async () => [], readEvent: async () => undefined },
+    });
+    const headers = await writeHeaders(app);
+    for (const text of [123, { a: 1 }, ['x'], null, undefined, '', '   ']) {
+      const refused = await call(app, '/api/dsh-memory/candidate', {
+        method: 'POST', headers,
+        body: { text, sourceRef: { session_id: 's1', event_seq: 2 } },
+      });
+      assert.equal(refused.status, 400, `text=${JSON.stringify(text)} must be refused`);
+      assert.equal(refused.json.error, 'empty');
+    }
+    const list = await call(app, '/api/dsh-memory/candidates');
+    assert.deepEqual(list.json.candidates, [], 'nothing was queued');
+  });
+});
+
 test('a rejected proposal touches nothing, and retract proposals go through the writer', async () => {
   await withApp(async (dir) => {
     const app = testApp(dir, {sessionQuery: {

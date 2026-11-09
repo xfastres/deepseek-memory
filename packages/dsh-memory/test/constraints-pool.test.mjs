@@ -183,3 +183,42 @@ test('the default constraint pool is what the constants say', () => {
   const result = selectMemories([], '', { now: NOW(), constraints: [constraint(RULE, RULE_DIGEST)] });
   assert.equal(result.pools.constraint.budget, DEFAULT_CONSTRAINT_BUDGET);
 });
+
+// A configured constraint is one of the ledger's own memories. Before this
+// guard the two pools were independent, so that memory was injected twice: the
+// condensed digest from pool one and the whole body from pool two. The model
+// read one claim as two, and the budget paid for both.
+test('a memory that is already a constraint does not also enter as its own body', () => {
+  // RULE is in the corpus AND configured as a standing constraint, and the
+  // query matches it lexically, so pool two would otherwise claim it too.
+  const result = selectMemories([RULE], RULE.content, {
+    now: NOW(),
+    constraints: [constraint(RULE, RULE_DIGEST)],
+  });
+  const ruleEntries = result.chosen.filter((entry) => entry.memory.id === 'M-rule');
+  assert.equal(ruleEntries.length, 1, 'the memory reaches the prompt exactly once');
+  assert.equal(ruleEntries[0].kind, 'constraint', 'the digest is the form that survives');
+  assert.equal(ruleEntries[0].text, RULE_DIGEST);
+  assert.ok(
+    result.excluded.some((entry) => entry.id === 'M-rule' && entry.reason === 'already-a-constraint'),
+    'the ordinary pool records why it stood down',
+  );
+  // Only the digest is charged, not the digest plus the full body.
+  assert.equal(result.used, RULE_DIGEST.length);
+  assert.equal(result.pools.dynamic.used, 0);
+});
+
+// The mirror image: the guard must key off constraints that were *chosen*. A
+// digest refused above (stale, too long, empty) leaves its memory eligible as
+// an ordinary memory, so a bad digest can never silently delete the memory too.
+test('a refused constraint leaves its memory available to the ordinary pool', () => {
+  const result = selectMemories([RULE], RULE.content, {
+    now: NOW(),
+    constraints: [constraint(RULE, 'Z'.repeat(DEFAULT_CONSTRAINT_MAX_CHARS + 1))],
+  });
+  assert.ok(result.excluded.some((entry) => entry.id === 'M-rule' && entry.reason === 'digest-too-long'));
+  const ids = result.chosen.map((entry) => entry.memory.id);
+  assert.deepEqual(ids, ['M-rule'], 'the memory is still injected, as its full body');
+  assert.equal(result.chosen[0].kind, undefined, 'and not as a constraint');
+  assert.equal(result.chosen[0].text, RULE.content);
+});

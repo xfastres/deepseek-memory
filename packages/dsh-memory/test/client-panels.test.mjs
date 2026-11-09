@@ -681,6 +681,112 @@ test('proposal rows carry the ledger version the user must confirm against', asy
   assert.equal(plugin.proposalActionLabel('nonsense', t), null);
 });
 
+test('proposal rows read the Host /state shape, not the panel view shape', async () => {
+  // Regression: probeHost passes the raw GET /state rows to proposalView. Those
+  // carry `content` / `last_change_id` (ledger-service.js toUiMemory), not the
+  // `text` / `changeId` that ledgerView produces. Reading the view names left
+  // currentContent empty and changeId null, and reviewProposalRow then refused
+  // every update/retract accept as "stale" — the proposal flow was dead against
+  // a real Host while this file's other test still passed, because that test fed
+  // proposalView the ledgerView output instead of the Host payload.
+  const { plugin } = await load();
+  const hostRows = [
+    { id: 'M-1', status: 'active', content: '项目使用 pnpm', type: 'fact', last_change_id: 'c-1', version: 1 },
+  ];
+  const view = plugin.proposalView({
+    proposals: [
+      { id: 'P-1', action: 'update', target_memory_id: 'M-1', content: '项目使用 pnpm 9', status: 'open' },
+    ],
+  }, hostRows);
+  assert.equal(view[0].currentContent, '项目使用 pnpm', 'the before text comes from the Host field `content`');
+  assert.equal(view[0].changeId, 'c-1', 'the base the user saw comes from the Host field `last_change_id`');
+  assert.equal(view[0].targetFound, true);
+  // The same rows in the panel's own view shape must give the same answer.
+  const viaView = plugin.proposalView({
+    proposals: [
+      { id: 'P-1', action: 'update', target_memory_id: 'M-1', content: '项目使用 pnpm 9', status: 'open' },
+    ],
+  }, plugin.ledgerView(hostRows));
+  assert.deepEqual(
+    [viaView[0].currentContent, viaView[0].changeId],
+    [view[0].currentContent, view[0].changeId],
+    'both shapes resolve to the same before text and base change id',
+  );
+});
+
+test('a missing target is reported missing from the Host shape too', async () => {
+  const { plugin } = await load();
+  const view = plugin.proposalView({
+    proposals: [
+      { id: 'P-1', action: 'retract', target_memory_id: 'M-gone', content: '', status: 'open' },
+    ],
+  }, [{ id: 'M-1', status: 'active', content: '还在', last_change_id: 'c-1' }]);
+  assert.equal(view[0].targetFound, false, 'a gone target is not silently accepted');
+  assert.equal(view[0].changeId, null);
+  assert.equal(view[0].currentContent, '');
+});
+
+test('a 404 keeps the reason the Host gave instead of claiming nothing is mounted', async () => {
+  // Regression: readResponse mapped every 404 to `not-mounted` before parsing
+  // the body, so a deleted memory was reported as "the plugin is not installed"
+  // and the `missingMemory` message could never be reached.
+  const { plugin, t } = await load();
+  const gone = plugin.createHostClient(async () => ({
+    ok: false,
+    status: 404,
+    text: async () => JSON.stringify({ ok: false, error: 'missing' }),
+  }));
+  await assert.rejects(() => gone.retract({ memoryId: 'M-1', expectedBaseChangeId: 'c-1' }), (error) => error.reason === 'missing');
+
+  // An unregistered path answers 404 with no JSON body, and that IS "not mounted".
+  const unmounted = plugin.createHostClient(async () => ({ ok: false, status: 404, text: async () => 'not found' }));
+  await assert.rejects(() => unmounted.state(), (error) => error.reason === 'not-mounted');
+
+  // A JSON body without an `error` field still means the route is absent.
+  const bareJson = plugin.createHostClient(async () => ({ ok: false, status: 404, text: async () => JSON.stringify({ ok: false }) }));
+  await assert.rejects(() => bareJson.state(), (error) => error.reason === 'not-mounted');
+
+  assert.notEqual(t('missingMemory'), 'missingMemory', 'the message a deleted memory needs exists');
+});
+
+test('the settings view forwards every field the Host sends', async () => {
+  // Regression: the panel rebuilt settings as {enabled, autoAccept} and dropped
+  // autoAcceptTypes, choices and fallback. Dropping fallback made a broken
+  // settings file look like the user's saved choices.
+  const { plugin } = await load();
+  const payload = {
+    ok: true,
+    loaded: true,
+    fallback: ['autoAccept', 'autoAcceptTypes[1]'],
+    settings: { version: 1, enabled: true, autoAccept: true, autoAcceptTypes: ['fact', 'preference'] },
+    choices: { autoAcceptTypes: ['fact', 'preference', 'constraint'] },
+  };
+  const client = plugin.createHostClient(async () => ({ ok: true, status: 200, text: async () => JSON.stringify(payload) }));
+  const read = await client.settings();
+  assert.deepEqual(read.settings.autoAcceptTypes, ['fact', 'preference'], 'the per-type policy is not dropped');
+  assert.deepEqual(read.choices.autoAcceptTypes, ['fact', 'preference', 'constraint'], 'the Host choices are not dropped');
+  assert.deepEqual(read.fallback, ['autoAccept', 'autoAcceptTypes[1]'], 'the fallback diagnostic is not dropped');
+  assert.equal(read.loaded, true);
+
+  // A missing settings object stays null rather than becoming a fabricated one.
+  const empty = plugin.createHostClient(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) }));
+  const none = await empty.settings();
+  assert.equal(none.settings ?? null, null);
+});
+
+test('the ledger header count comes from the Host total, not the drawn slice', async () => {
+  // Regression: the header rendered shownLedger.length, which ledgerView caps at
+  // 20, so a 200-memory ledger claimed "20 entries".
+  const { plugin } = await load();
+  const many = Array.from({ length: 25 }, (_, index) => ({ id: `M-${index}`, status: 'active', content: `第 ${index} 条` }));
+  assert.equal(plugin.ledgerView(many).length, 20, 'the drawn list stays bounded');
+  assert.equal(many.length, 25, 'while the Host total is the real count');
+  // Both message forms exist and name their numbers, so the panel can be honest.
+  const { t } = await load();
+  assert.match(t('ledgerTitleTruncated'), /\{count\}/u);
+  assert.match(t('ledgerTitleTruncated'), /\{shown\}/u);
+});
+
 test('proposal decisions send the proposal id, the action, and only a real base change id', async () => {
   const { plugin, t } = await load();
   const calls = [];

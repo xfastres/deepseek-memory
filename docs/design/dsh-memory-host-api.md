@@ -99,6 +99,8 @@
 
 > 结构化字段（L1 账本 schema 已有，此前被写入层丢弃）：`POST /add` 与 `POST /update` 接受可选 `tags`（字符串数组，≤20）与 `entities`（字符串数组，≤50），原样交给账本校验器：合法列表写入记录，类型不合法由 schema 拒绝并返回 422 `invalid`，不会被静默忽略。`/update` 省略列表时保留原值，显式给出非空列表时替换（账本提供方的既有语义，宿主不额外改写）。
 
+> 变更证据（§5.1）：`POST /update` 与 `POST /retract` 接受可选 `sourceRef`（或 `sessionId` + `turn`，由 Host 解析成 ref）。**给了就用它核验**；没给时核验**被改记忆自身携带的 `source_refs`**——一次正式变更总要有可核验的证据，核验不通过返回 `422 no-evidence` 且账本零改动。`verify([])` 不再返回「已核验」：空集合的全称命题为真，但那不构成任何证据，此前正是它让这两个路由在零条证据下写入。核验通过的 ref 会写回该次变更记录，历史里不会留下「对空集已核验」的痕迹。
+
 > 修正即回应异议（§6.5）：`POST /update` 可选 `clearObjection: true`，写入成功后清除该记忆的活动异议（响应带 `objection_cleared`；本就没有异议不算错误，返回 `false`）。未带该字段的普通修改不改变异议状态。面板对「待核查」行提供「接受现状」（等价于 `POST /objections/clear`），以及在编辑保存时自动带上 `clearObjection`。
 
 > 核查类异议（§6.3）：`too_broad`/`missing_context`/`wrong_scope`/`duplicate` 是「请重新核查」而不是「判为错误」，`GET /objections` 因此额外返回 `review_pending`（这些记忆的 id 数组）。它们**同时仍在 `suppressed` 中**：未核查清楚的记忆不得被当作已确认结论；面板对这类行显示「待核查」。自动接受路径拿不到这些记忆的重新激活权：`decideAutoMemory` 遇到「正文与待核查记忆相同」的候选直接降为 `REVIEW_REQUIRED`（`reasons: ['objected-memory']`）。
@@ -146,11 +148,13 @@
 
 | 方法与路径 | 请求 | 语义 |
 |---|---|---|
-| `POST /candidates` | `{ text, source:{session_id,turn,event_seqs} }` | 新增候选；证据字段必填 |
-| `POST /review` | `{ candidateId, action:'accept'\|'reject', targetId?, expectedBaseVersion?, content? }` | 接受/拒绝/合并；`content` 是编辑后的正文 |
-| `POST /edit` | `{ memoryId, content, expectedVersion }` | 直接编辑正式记忆，生成新版本 |
+| `POST /candidate` | `{ text, sourceRef \| sessionId+turn, type?, confidence?, reason?, origin? }` | 新增候选；证据字段必填，`text` 必须是字符串且非空（否则 `400 empty`，不做 `String()` 强转） |
+| `POST /review` | `{ candidateId, action:'accept'\|'reject', content?, targetId?, expectedBaseVersion? }` | 接受/拒绝/合并；`content` 是编辑后的正文。接受只对**仍开放**的候选生效，已定状态的候选返回 `409 not-open`（否则幂等回放会静默丢弃新正文） |
+| `POST /edit` | `{ memoryId, content, expectedVersion }` | 直接编辑正式记忆，生成新版本（**未实现**，当前走 `/update`） |
 | `POST /settings` | `{ ...partial }` | 更新设置（注入开关、预算等） |
-| `POST /import` | 导出格式的 JSON | 一次性迁移旧 localStorage 数据 |
+| `POST /import` | 导出格式的 JSON | 一次性迁移旧 localStorage 数据（**未实现**，当前走 `/migrate`） |
+
+> 注：早期草稿把新增候选写成 `POST /candidates`（复数），实际路由是 `POST /candidate`（单数）；`/candidates` 是只读 GET。
 
 ### 3.3 错误码
 

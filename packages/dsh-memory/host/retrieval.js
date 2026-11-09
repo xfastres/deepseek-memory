@@ -244,11 +244,26 @@ export function selectMemories(memories, query, options = {}) {
   }
 
   // Pool two: ordinary memories, scored exactly as before.
+  //
+  // A memory that already entered as a standing constraint must not enter again
+  // as its own full body. The two pools are independent by design, so nothing
+  // else would stop it: the digest above and the whole memory below would both
+  // reach the prompt, and the model would read one claim twice as if it were
+  // two. Only the constraints actually *chosen* are skipped — a constraint
+  // rejected above (over its cap, stale digest, ...) leaves its memory eligible
+  // here, so a refused digest never silently drops the memory as well.
+  const constraintIds = new Set(
+    chosenConstraints.map((entry) => entry.memory.id).filter((id) => typeof id === 'string'),
+  );
   const scored = [];
   for (const memory of memories) {
     const reason = eligibility(memory, { now, scope, includePrivate });
     if (reason !== null) {
       excluded.push({ id: memory.id, reason });
+      continue;
+    }
+    if (constraintIds.has(memory.id)) {
+      excluded.push({ id: memory.id, reason: 'already-a-constraint', pool: 'dynamic' });
       continue;
     }
     const score = scoreMemory(memory, query, { now });

@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
       migrateSummary: '导入完成：新增 {applied} 条，重复 {replayed} 条，失败 {failed} 条，跳过 {skipped} 条（{detail}）',
       migrateNoSkips: '无',
       migrateFailed: '导入失败：{reason}',
-      ledgerTitle: '记忆库内容（{count} 条）',
+      ledgerTitle: '记忆库内容（{count} 条）', ledgerTitleTruncated: '记忆库内容（共 {count} 条，显示前 {shown} 条）',
       ledgerActive: '已生效',
       ledgerInactive: '已撤回',
       candidateEmpty: '候选内容不能为空。',
@@ -67,7 +67,7 @@ window.__ModuleLoader__.load({
       proposalBefore: '当前版本', proposalAfter: '提案内容',
       candidateAcceptedByUser: '用户接受', candidateRejected: '已拒绝', candidateConflict: '冲突', candidateNoChange: '无需变化', candidateFailed: '失败',
       settingsTitle: '自动记忆设置', settingsOn: '允许自动提取候选（总开关）', settingsAutoAccept: '允许低风险候选自动写入（默认关闭）',
-      settingsSave: '保存设置', settingsSaved: '设置已保存。', settingsFailed: '设置保存失败，请重试。', settingsHint: '自动接受只影响证据充分、无冲突、非敏感的事实/偏好/约束；随时可关闭。',
+      settingsSave: '保存设置', settingsSaved: '设置已保存。', settingsFailed: '设置保存失败，请重试。', settingsTypes: '自动接受覆盖的类型：', settingsFallback: '设置文件有问题，以下字段已回退到默认值：', settingsHint: '自动接受只影响证据充分、无冲突、非敏感的事实/偏好/约束；随时可关闭。',
       kindWrong: '错误', kindTooBroad: '太宽泛', kindOutdated: '过期', kindMissingContext: '缺少上下文',
       kindWrongScope: '范围错误', kindDuplicate: '重复', kindShouldNotSave: '不应保存', kindDelete: '删除',
       objectedDone: '已标记有误：这条记忆会立即退出检索与注入，账本内容不变。', objectFailed: '标记失败，请重试。', reinstateDone: '已恢复使用。',
@@ -120,7 +120,7 @@ window.__ModuleLoader__.load({
       migrateSummary: 'Import finished: {applied} added, {replayed} already present, {failed} failed, {skipped} skipped ({detail})',
       migrateNoSkips: 'none',
       migrateFailed: 'Import failed: {reason}',
-      ledgerTitle: 'Memory store contents ({count})',
+      ledgerTitle: 'Memory store contents ({count})', ledgerTitleTruncated: 'Memory store contents ({count} total, showing the first {shown})',
       ledgerActive: 'active',
       ledgerInactive: 'retracted',
       candidateEmpty: 'The candidate text is empty.',
@@ -150,7 +150,7 @@ window.__ModuleLoader__.load({
       proposalBefore: 'Current version', proposalAfter: 'Proposed text',
       candidateAcceptedByUser: 'accepted by the user', candidateRejected: 'rejected', candidateConflict: 'conflict', candidateNoChange: 'no change needed', candidateFailed: 'failed',
       settingsTitle: 'Automatic memory', settingsOn: 'queue extracted candidates (master switch)', settingsAutoAccept: 'write low-risk candidates without review (off by default)',
-      settingsSave: 'Save settings', settingsSaved: 'Settings saved.', settingsFailed: 'Could not save the settings. Try again.', settingsHint: 'Auto-accept only covers evidenced, non-conflicting, non-sensitive facts, preferences and constraints. It can be switched off at any time.',
+      settingsSave: 'Save settings', settingsSaved: 'Settings saved.', settingsFailed: 'Could not save the settings. Try again.', settingsTypes: 'Auto-accept covers these types: ', settingsFallback: 'The settings file had a problem; these fields fell back to their defaults: ', settingsHint: 'Auto-accept only covers evidenced, non-conflicting, non-sensitive facts, preferences and constraints. It can be switched off at any time.',
       kindWrong: 'wrong', kindTooBroad: 'too broad', kindOutdated: 'outdated', kindMissingContext: 'missing context',
       kindWrongScope: 'wrong scope', kindDuplicate: 'duplicate', kindShouldNotSave: 'should not be saved', kindDelete: 'delete',
       objectedDone: 'Marked wrong: this memory leaves retrieval and injection now; the ledger is unchanged.', objectFailed: 'Could not record the objection. Try again.', reinstateDone: 'Restored.',
@@ -965,17 +965,24 @@ window.__ModuleLoader__.load({
         return data;
       }
       async function readResponse(response) {
-        if (response.status === 404) throw hostError('not-mounted');
-        if (response.status === 403) throw hostError('forbidden');
-        if (response.status === 401) throw hostError('unauthorized');
+        // A 404 is two different facts and the Host distinguishes them in the
+        // body: `{error:'missing'}` means the memory/candidate/proposal is gone,
+        // while an unregistered path answers with no such body. Collapsing every
+        // 404 to `not-mounted` before reading the body told the user the plugin
+        // was not installed when the real answer was "this memory was deleted",
+        // and left the `missingMemory` message unreachable.
         let data = null;
         try {
           data = JSON.parse(await response.text());
         } catch {
           data = null;
         }
+        const bodyError = data !== null && typeof data === 'object' && typeof data.error === 'string' ? data.error : null;
+        if (response.status === 404) throw hostError(bodyError !== null ? bodyError : 'not-mounted');
+        if (response.status === 403) throw hostError('forbidden');
+        if (response.status === 401) throw hostError('unauthorized');
         if (!response.ok) {
-          throw hostError(data && typeof data.error === 'string' ? data.error : `http-${response.status}`);
+          throw hostError(bodyError !== null ? bodyError : `http-${response.status}`);
         }
         if (!data || data.ok !== true) throw hostError('unexpected');
         return data;
@@ -1305,6 +1312,15 @@ window.__ModuleLoader__.load({
     /**
      * Rows for the proposal panel. The before text comes only from the ledger
      * row the user can already see; nothing is invented when the target is gone.
+     *
+     * `ledgerRows` are the rows exactly as `GET /state` returns them (the Host's
+     * `toUiMemory` shape: `content` and `last_change_id`). Reading the *view*
+     * shape instead (`text`/`changeId`, which `ledgerView` produces) left the
+     * before-text empty and the base change id null, and `reviewProposalRow`
+     * then refused every update/retract accept as stale — the panel's whole
+     * proposal flow was dead against a real Host. Both names are accepted so a
+     * caller holding either shape gets the same answer, but the Host's own
+     * field names are the ones that matter.
      */
     function proposalView(data, ledgerRows, limit = 10) {
       const list = data && Array.isArray(data.proposals) ? data.proposals : [];
@@ -1313,6 +1329,13 @@ window.__ModuleLoader__.load({
         const source = proposal !== null && typeof proposal === 'object' ? proposal : {};
         const targetId = typeof source.target_memory_id === 'string' ? source.target_memory_id : null;
         const target = targetId === null ? null : known.get(targetId);
+        const targetText = target === null || target === undefined
+          ? ''
+          : (typeof target.content === 'string' ? target.content : (typeof target.text === 'string' ? target.text : ''));
+        const targetChangeId = target === null || target === undefined
+          ? null
+          : (typeof target.last_change_id === 'string' ? target.last_change_id
+            : (typeof target.changeId === 'string' ? target.changeId : null));
         return {
           id: typeof source.id === 'string' ? source.id : '',
           action: typeof source.action === 'string' ? source.action : null,
@@ -1322,9 +1345,9 @@ window.__ModuleLoader__.load({
           reason: typeof source.reason === 'string' ? source.reason : '',
           targetId,
           targetFound: targetId === null ? true : target !== undefined,
-          currentContent: target !== null && target !== undefined && typeof target.text === 'string' ? target.text : '',
+          currentContent: targetText,
           proposedContent: typeof source.content === 'string' ? source.content : '',
-          changeId: target !== null && target !== undefined && typeof target.changeId === 'string' ? target.changeId : null,
+          changeId: targetChangeId,
           createdAt: typeof source.created_at === 'string' ? source.created_at : null,
         };
       });
@@ -1614,37 +1637,68 @@ window.__ModuleLoader__.load({
           return;
         }
         createHostClient(fetch).settings().then((data) => {
-          setHostSettings({
-            status: 'ready',
-            settings: data && typeof data === 'object' && data.settings && typeof data.settings === 'object'
-              ? { enabled: data.settings.enabled === true, autoAccept: data.settings.autoAccept === true }
-              : null,
-            error: null,
-          });
+          // Forward what the Host sent instead of rebuilding it field by field.
+          // See readSettingsPayload: dropping `fallback` made defaults look like
+          // the user's saved choices, and dropping `autoAcceptTypes`/`choices`
+          // hid the per-type policy §10.1.6 is about.
+          setHostSettings({ status: 'ready', settings: readSettingsPayload(data), error: null });
         }, () => setHostSettings({ status: 'error', settings: null, error: 'network' }));
+      };
+      /**
+       * One reading of the Host's settings payload, used by both load and save.
+       *
+       * Rebuilding the object field by field at each call site is how
+       * `autoAcceptTypes`, `choices` and `fallback` got dropped: a second copy of
+       * the shape drifts from the first. Everything the Host sent is forwarded,
+       * and a field it did not send stays empty rather than being invented.
+       */
+      const readSettingsPayload = (data) => {
+        const source = data !== null && typeof data === 'object' && data.settings !== null && typeof data.settings === 'object'
+          ? data.settings
+          : null;
+        if (source === null) return null;
+        const choices = data !== null && typeof data === 'object' && data.choices !== null && typeof data.choices === 'object'
+          ? data.choices
+          : null;
+        return {
+          enabled: source.enabled === true,
+          autoAccept: source.autoAccept === true,
+          autoAcceptTypes: Array.isArray(source.autoAcceptTypes)
+            ? source.autoAcceptTypes.filter((type) => typeof type === 'string')
+            : [],
+          // Diagnostic only: named fields the Host had to fall back on.
+          fallback: Array.isArray(data.fallback) ? data.fallback.filter((field) => typeof field === 'string') : [],
+          loaded: data.loaded === true,
+          choices: choices !== null && Array.isArray(choices.autoAcceptTypes)
+            ? choices.autoAcceptTypes.filter((type) => typeof type === 'string')
+            : [],
+        };
       };
       const saveHostSettings = (next) => {
         if (typeof fetch !== 'function') return;
         createHostClient(fetch).saveSettings(next).then((data) => {
-          setHostSettings({
-            status: 'ready',
-            settings: data && typeof data === 'object' && data.settings && typeof data.settings === 'object'
-              ? { enabled: data.settings.enabled === true, autoAccept: data.settings.autoAccept === true }
-              : null,
-            error: null,
-          });
+          setHostSettings({ status: 'ready', settings: readSettingsPayload(data), error: null });
           setNotice(t('settingsSaved'));
         }, () => setNotice(t('settingsFailed')));
       };
       /** Open AI proposals: read-only until the user decides. */
       const [proposals, setProposals] = useState({ status: 'idle', rows: [] });
-      const loadProposals = () => {
+      /**
+       * `rows` is passed in rather than read from the `ledger` state.
+       *
+       * `probeHost` calls this in the same tick that it calls `setLedger`, so a
+       * closure over `ledger` still sees the previous (mount-time empty) value.
+       * Every targeted proposal then reported `targetFound: false` and could not
+       * be accepted until some unrelated write happened to re-run the probe.
+       */
+      const loadProposals = (rows) => {
         if (typeof fetch !== 'function') {
           setProposals({ status: 'idle', rows: [] });
           return;
         }
+        const known = Array.isArray(rows) ? rows : [];
         createHostClient(fetch).proposals().then((data) => {
-          setProposals({ status: 'ready', rows: proposalView(data, ledger) });
+          setProposals({ status: 'ready', rows: proposalView(data, known) });
         }, () => setProposals({ status: 'error', rows: [] }));
       };
       const loadObjections = () => {
@@ -1666,15 +1720,26 @@ window.__ModuleLoader__.load({
       const [typeFilter, setTypeFilter] = useState('');
       /** Original-evidence branch: idle, loading, ready, missing or unavailable. */
       const [evidence, setEvidence] = useState({ status: 'idle', turn: null, ref: null });
+      /**
+       * Only the newest evidence request may write the panel.
+       *
+       * Clicking "view evidence" on memory A and then on B starts two loads; the
+       * slower one (A) used to resolve last and overwrite B's result, so the
+       * panel showed A's turn while B was the memory the user asked about. A
+       * late answer is discarded rather than displayed.
+       */
+      const evidenceGeneration = useRef(0);
       const openEvidence = (memory) => {
         const refs = evidenceRefsOf(memory);
         if (refs.length === 0) { setNotice(t('evidenceMissing')); return; }
         const ref = refs[0];
+        evidenceGeneration.current += 1;
+        const generation = evidenceGeneration.current;
         setEvidence({ status: 'loading', turn: null, ref });
         const controller = new AbortController();
         const load = async () => {
           if (!sessions || typeof sessions.retain !== 'function') {
-            setEvidence({ status: 'unavailable', turn: null, ref });
+            if (evidenceGeneration.current === generation) setEvidence({ status: 'unavailable', turn: null, ref });
             return;
           }
           let reference;
@@ -1684,9 +1749,10 @@ window.__ModuleLoader__.load({
             await loadFullHistory(reference, controller.signal);
             const grouped = groupTurns(ref.session_id, sessionEvents(reference.binding));
             const turn = locateTurnForEvent(grouped.map((item) => evidenceTurn(ref.session_id, item)), ref);
+            if (evidenceGeneration.current !== generation) return;
             setEvidence(turn ? { status: 'ready', turn, ref } : { status: 'missing', turn: null, ref });
           } catch {
-            setEvidence({ status: 'unavailable', turn: null, ref });
+            if (evidenceGeneration.current === generation) setEvidence({ status: 'unavailable', turn: null, ref });
           } finally {
             if (reference && typeof reference.release === 'function') reference.release();
           }
@@ -1706,12 +1772,16 @@ window.__ModuleLoader__.load({
           loadChanges();
           loadObjections();
           loadHostSettings();
-          loadProposals();
+          // Pass the rows just received: this tick's `ledger` is still stale.
+          loadProposals(data.memories);
         }, (error) => {
           setHost({ status: 'offline', count: 0, head: null, reason: (error && error.reason) || 'network' });
           setLedger([]);
           setHostQueue({ status: 'idle', rows: [], error: null });
-          setObjections({ status: 'idle', rows: [], suppressed: [], kinds: [] });
+          // Every field the render reads must be present here too: a reset that
+          // omits one leaves a `undefined.includes(...)` waiting for the first
+          // row that renders while offline.
+          setObjections({ status: 'idle', rows: [], suppressed: [], kinds: [], reviewPending: [] });
           setHostSettings({ status: 'idle', settings: null, error: null });
         });
       };
@@ -2073,19 +2143,34 @@ window.__ModuleLoader__.load({
 
       /** Version timeline of the row whose history is open; read-only. */
       const [history, setHistory] = useState({ id: null, status: 'idle', rows: [] });
+      /**
+       * Only the newest history request may write the panel.
+       *
+       * Opening A and then B before A's response arrives used to let A's late
+       * answer replace B's rows, leaving the panel expanded on one memory while
+       * showing another memory's versions.
+       */
+      const historyGeneration = useRef(0);
       const openHistory = (row) => {
         if (history.id === row.id) {
+          historyGeneration.current += 1; // cancel any in-flight load for this row
           setHistory({ id: null, status: 'idle', rows: [] });
           return;
         }
+        historyGeneration.current += 1;
+        const generation = historyGeneration.current;
         if (typeof fetch !== 'function') {
           setHistory({ id: row.id, status: 'error', rows: [] });
           return;
         }
         setHistory({ id: row.id, status: 'loading', rows: [] });
         createHostClient(fetch).history({ memoryId: row.id }).then((data) => {
+          if (historyGeneration.current !== generation) return;
           setHistory({ id: row.id, status: 'ready', rows: versionView(data).rows });
-        }, () => setHistory({ id: row.id, status: 'error', rows: [] }));
+        }, () => {
+          if (historyGeneration.current !== generation) return;
+          setHistory({ id: row.id, status: 'error', rows: [] });
+        });
       };
       const historyBlock = (row) => h('div', { className: 'dm-history' },
         history.status === 'loading'
@@ -2227,6 +2312,19 @@ window.__ModuleLoader__.load({
                   onChange: (event) => saveHostSettings({ autoAccept: event.target.checked }),
                 }),
                 h('span', null, t('settingsAutoAccept'))),
+              // Which types auto-accept may cover, as the Host reports them. The
+              // list is shown, never re-derived: the panel must not guess a
+              // policy the Host owns.
+              hostSettings.settings.autoAcceptTypes.length > 0
+                ? h('p', { className: 'dm-muted' }, `${t('settingsTypes')}${hostSettings.settings.autoAcceptTypes.join('、')}`)
+                : null,
+              // The Host fell back on a named field, so what is shown is the
+              // default rather than the user's saved choice. Saying so is the
+              // difference between "these are your settings" and a silent lie.
+              hostSettings.settings.fallback.length > 0
+                ? h('p', { className: 'dm-muted dm-error', role: 'alert' },
+                  `${t('settingsFallback')}${hostSettings.settings.fallback.join('、')}`)
+                : null,
               h('p', { className: 'dm-muted' }, t('settingsHint')))
             : null,
           host.status === 'ok' && hostQueue.status === 'error'
@@ -2259,7 +2357,16 @@ window.__ModuleLoader__.load({
             : null,
           host.status === 'ok' && shownLedger.length > 0
             ? h('section', { className: 'dm-ledger' },
-              h('p', { className: 'dm-muted' }, t('ledgerTitle').replace('{count}', String(shownLedger.length))),
+              // The count is the Host's total, not the length of the slice drawn
+              // below. ledgerView stops at 20 rows, so a 200-memory ledger used to
+              // claim "20 entries" — the panel reporting a number it invented
+              // rather than the one the Host sent. When rows are held back the
+              // header says so instead of quietly implying they do not exist.
+              h('p', { className: 'dm-muted' }, (shownLedger.length < host.count
+                ? t('ledgerTitleTruncated')
+                  .replace('{count}', String(host.count))
+                  .replace('{shown}', String(shownLedger.length))
+                : t('ledgerTitle').replace('{count}', String(host.count)))),
               h('ul', { className: 'dm-ledger-list' }, shownLedger.map((row) => ledgerItem(row))))
             : null,
           h(InjectionPanel, { t }),

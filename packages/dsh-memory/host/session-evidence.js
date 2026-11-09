@@ -130,11 +130,20 @@ export function createEvidenceResolver({ sessionQuery }) {
       }
       return undefined;
     },
-    /** Check that every ref still points at a real event of the right type. */
+    /**
+     * Check that every ref still points at a real event of the right type.
+     *
+     * An empty list is NOT verified. "Every ref in an empty set is valid" is
+     * vacuously true, and the callers that pass no refs (/update and /retract
+     * without a sourceRef) then believed evidence had been checked while nothing
+     * had been proved. A formal write with no evidence must fail closed (§5.1).
+     */
     async verify(refs) {
+      const list = Array.isArray(refs) ? refs.filter((ref) => ref !== null && typeof ref === 'object') : [];
+      if (list.length === 0) return { verified: false, reason: 'no-refs' };
       const missing = [];
       const seen = new Map();
-      for (const ref of refs) {
+      for (const ref of list) {
         let records = seen.get(ref.session_id);
         if (records === undefined) {
           try {

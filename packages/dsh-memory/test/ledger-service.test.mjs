@@ -266,3 +266,51 @@ test('each history version keeps the refs it was written with', async () => {
     assert.ok(versions.every((version) => Array.isArray(version.source_refs)));
   });
 });
+
+test('a change with no evidence of its own is checked against the memory it changes', async () => {
+  // Regression: /update and /retract passed no source refs, so apply() called
+  // verifyEvidence([]) and the verifier answered "verified" without reading
+  // anything. A formal write then landed with zero checked evidence. The rule is
+  // that something real is always verified: the new refs when supplied, the
+  // target's own refs otherwise, and a refusal when neither exists.
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-evidence-'));
+  try {
+    const root = join(dir, 'ledger');
+    // Seed a memory without a verifier.
+    const seed = createLedgerService({ root });
+    const added = await seed.add({ content: '项目使用 pnpm 管理依赖。', type: 'fact', sourceRefs: REF });
+
+    const seen = [];
+    const service = createLedgerService({
+      root,
+      verifyEvidence: async (refs) => { seen.push(refs.length); return { verified: true }; },
+    });
+
+    await service.update({
+      memoryId: added.memory.id,
+      content: '项目使用 pnpm 9 管理依赖。',
+      expectedBaseChangeId: added.memory.last_change_id,
+    });
+    // The verifier runs twice per write: once for the Host's own gate, and once
+    // for the ledger to record what the change rested on. Both must see a real
+    // ref — the number that matters is that neither is ever 0.
+    assert.ok(seen.length >= 1, 'the gate consulted the verifier');
+    assert.ok(seen.every((count) => count === 1), `every check saw exactly the target's one ref, got ${seen.join(',')}`);
+
+    const [current] = (await service.state()).memories;
+    seen.length = 0;
+    await service.retract({ memoryId: current.id, expectedBaseChangeId: current.last_change_id });
+    assert.ok(seen.length >= 1, 'a retract consults the verifier too');
+    assert.ok(seen.every((count) => count === 1), `a retract verifies the refs it withdraws, got ${seen.join(',')}`);
+
+    // A verifier that refuses must stop the write, not be skipped.
+    const refusing = createLedgerService({ root, verifyEvidence: async () => ({ verified: false, reason: 'probe' }) });
+    await assert.rejects(
+      () => refusing.update({ memoryId: current.id, content: '又被拒绝的内容。', expectedBaseChangeId: current.last_change_id }),
+      (error) => error.name === 'EvidenceError',
+    );
+    assert.equal((await refusing.state()).memories.length, 1, 'the refused update left the ledger unchanged');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

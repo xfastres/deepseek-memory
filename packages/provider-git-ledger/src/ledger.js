@@ -141,9 +141,14 @@ export class MemoryLedger {
     const base = commit ?? (await this.readHead());
     if (base === null) return [];
     const paths = (await this.git.lsTree(base, 'records/')).filter((path) => path.endsWith('.json'));
+    if (paths.length === 0) return [];
+    // One `cat-file --batch` for the whole set instead of one `show` per path:
+    // this is the read behind every snapshot refresh, so a spawn per memory is
+    // a per-turn cost that grows with the store.
+    const blobs = await this.git.showMany(base, paths);
     const out = [];
     for (const path of paths) {
-      const raw = await this.git.showOrUndefined(base, path);
+      const raw = blobs.get(path);
       if (raw === undefined) continue;
       const memory = validateMemory(JSON.parse(raw));
       if (includeInactive || memory.status === 'active') out.push(memory);

@@ -72,12 +72,45 @@ export function createLedgerService(options = {}) {
   async function listMemories() {
     const ready = await open();
     const records = await ready.listMemories({ includeInactive: true });
+    // Version numbers come from one history walk for the whole store, not one
+    // `git log` per memory. The per-memory walk is correct but costs a process
+    // spawn each, and this function runs on every snapshot refresh — that is,
+    // in front of the user's next turn. `git log --name-only` over records/
+    // already prints exactly which memory each commit touched, so counting the
+    // lines per path yields the same number as history().length.
+    const counts = await versionCounts(ready);
     const out = [];
     for (const record of records) {
-      const versions = await ready.history(record.memory_id);
-      out.push(toUiMemory(record, versions.length === 0 ? 1 : versions.length));
+      const seen = counts.get(record.memory_id) ?? 0;
+      out.push(toUiMemory(record, seen === 0 ? 1 : seen));
     }
     return out;
+  }
+
+  /**
+   * Commit count per memory id, from a single `git log`.
+   *
+   * Returns an empty map when the walk fails: a caller then reports version 1
+   * for everything rather than failing the whole read. That is the same
+   * conservative answer as a brand-new memory, and the ledger content itself
+   * (the part that matters) still comes from the committed records.
+   */
+  async function versionCounts(ready) {
+    const counts = new Map();
+    let raw;
+    try {
+      raw = await ready.git.run(['log', '--format=%H', '--name-only', '--', 'records/']);
+    } catch {
+      return counts;
+    }
+    for (const line of String(raw ?? '').split('\n')) {
+      const path = line.trim();
+      if (!path.startsWith('records/') || !path.endsWith('.json')) continue;
+      const id = path.slice('records/'.length, -'.json'.length);
+      if (id === '') continue;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
   }
 
   /**
@@ -211,12 +244,35 @@ export function createLedgerService(options = {}) {
     // (roadmap 4.1 / 5.1 "不可伪造引用"). Every writer path goes through here,
     // so checks live in one place rather than in each route.
     if (typeof verifyEvidence === 'function') {
-      const checked = await verifyEvidence(Array.isArray(full.source_refs) ? full.source_refs : []);
+      // What actually justifies this change. ADD/UPDATE carry their own refs.
+      // A RETRACT passes none by design — it is not asserting new content, it is
+      // withdrawing a claim — so the refs it is withdrawing are the ones to
+      // check. Verifying an empty list would return "verified" while proving
+      // nothing, which is how the gate used to pass vacuously.
+      const refs = Array.isArray(full.source_refs) && full.source_refs.length > 0
+        ? full.source_refs
+        : await existingRefs(full);
+      if (refs.length === 0) {
+        const refused = new Error('no evidence is available for this change');
+        refused.name = 'EvidenceError';
+        refused.details = { verified: false, reason: 'no-refs' };
+        throw refused;
+      }
+      const checked = await verifyEvidence(refs);
       if (checked === null || checked === undefined || checked.verified !== true) {
         const refused = new Error('evidence does not verify against the session log');
         refused.name = 'EvidenceError';
         refused.details = checked;
         throw refused;
+      }
+      // Record what was actually checked. The ledger also asks the provider to
+      // verify `proposal.source_refs` and stores that answer in the change, so
+      // leaving it empty here would write "verified against nothing" into the
+      // history for a retract — a record that misdescribes its own evidence.
+      // UPDATE merges these with the refs the record already had, so this only
+      // ever adds the refs the change really rests on.
+      if (!Array.isArray(full.source_refs) || full.source_refs.length === 0) {
+        full.source_refs = refs;
       }
     }
     // Callers may pass an explicit key for replay safety; otherwise the ledger
@@ -231,6 +287,27 @@ export function createLedgerService(options = {}) {
       commit: result.commit,
       memory: toUiMemory(result.memory, undefined),
     };
+  }
+
+  /**
+   * The evidence a change is allowed to rest on when the caller cites none.
+   *
+   * For UPDATE/RETRACT that is the refs of the memory being changed: the write
+   * is about that claim, so its proof is the proof already on file. Returns []
+   * when the target is unknown or carries no refs, which the caller turns into
+   * a refusal rather than a vacuous pass.
+   */
+  async function existingRefs(proposal) {
+    const targetId = proposal !== null && typeof proposal === 'object' ? proposal.target_memory_id : null;
+    if (typeof targetId !== 'string' || targetId === '') return [];
+    try {
+      const ready = await open();
+      const before = await ready.getMemory(targetId);
+      return before !== null && before !== undefined && Array.isArray(before.source_refs) ? before.source_refs : [];
+    } catch {
+      // An unreadable target is not evidence; the write is refused upstream.
+      return [];
+    }
   }
 
   /**

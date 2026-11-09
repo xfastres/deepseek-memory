@@ -133,6 +133,59 @@ export class GitRepo {
     return this.run(['show', `${commit}:${path}`]);
   }
 
+  /**
+   * Read many blobs at one commit with a single `git cat-file --batch`.
+   *
+   * `show()` per path is correct but spawns one process each; a caller reading
+   * every record pays that once per memory, which is seconds of latency on a
+   * path that runs before a user's next turn. `cat-file --batch` takes all the
+   * specs on stdin and answers on stdout.
+   *
+   * Parsing is done on bytes, not on a decoded string: the header's size is a
+   * byte count, and a UTF-8 body (this ledger is full of Chinese) has more bytes
+   * than characters. Slicing a decoded string by that number would cut records
+   * short and silently corrupt them.
+   *
+   * @returns {Promise<Map<string, string|undefined>>} path -> blob text, or
+   *   undefined for a path that does not exist at that commit
+   */
+  async showMany(commit, paths) {
+    const out = new Map();
+    const wanted = Array.isArray(paths) ? paths.filter((path) => typeof path === 'string' && path !== '') : [];
+    if (wanted.length === 0) return out;
+    const input = `${wanted.map((path) => `${commit}:${path}`).join('\n')}\n`;
+    const buffer = Buffer.from(await this.run(['cat-file', '--batch'], { input }), 'utf8');
+    // Responses arrive in request order, which is how each body is mapped back
+    // to its path without relying on the object id.
+    let at = 0;
+    let index = 0;
+    while (at < buffer.length && index < wanted.length) {
+      const newline = buffer.indexOf(0x0a, at);
+      if (newline === -1) break;
+      const header = buffer.subarray(at, newline).toString('utf8');
+      at = newline + 1;
+      const parts = header.split(' ');
+      // A missing spec answers "<spec> missing" with no size.
+      if (parts.length < 3) {
+        out.set(wanted[index], undefined);
+        index += 1;
+        continue;
+      }
+      const size = Number(parts[2]);
+      if (!Number.isFinite(size) || size < 0) {
+        out.set(wanted[index], undefined);
+        index += 1;
+        continue;
+      }
+      out.set(wanted[index], buffer.subarray(at, at + size).toString('utf8'));
+      at += size + 1; // the body is followed by exactly one newline
+      index += 1;
+    }
+    // Any spec the stream did not answer is reported absent, never guessed.
+    for (; index < wanted.length; index += 1) out.set(wanted[index], undefined);
+    return out;
+  }
+
   /** The committed blob at `commit` for `path`, or undefined when that path is absent there. */
   async showOrUndefined(commit, path) {
     try {

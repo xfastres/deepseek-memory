@@ -139,6 +139,21 @@ test('a turn whose user message is missing yields no ref instead of a wrong one'
   assert.equal(await resolver.resolve({ sessionId: 'session-a', turn: 1 }), undefined);
 });
 
+test('an empty ref list is refused, not vacuously verified', async () => {
+  // Regression: "every ref in an empty set is valid" is true, so verify([])
+  // returned verified:true. The /update and /retract routes passed no refs, so
+  // the evidence gate they ran proved nothing while the code believed it had
+  // checked — a formal write landed with zero verified evidence (§5.1).
+  const resolver = createEvidenceResolver({
+    sessionQuery: { async listEvents() { return LOG; } },
+  });
+  for (const empty of [[], null, undefined, [null], ['not-an-object']]) {
+    const checked = await resolver.verify(empty);
+    assert.equal(checked.verified, false, `verify(${JSON.stringify(empty)}) must not be "verified"`);
+    assert.equal(checked.reason, 'no-refs');
+  }
+});
+
 test('verification reports missing, mismatched and unreadable evidence', async () => {
   const resolver = createEvidenceResolver({
     sessionQuery: {
