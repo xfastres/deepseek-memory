@@ -16,7 +16,7 @@ import { evaluateCandidatePolicies } from './policy.js';
 import { toLedgerType } from './memory-types.js';
 import { CORRECTION_KINDS } from './corrections.js';
 import { narrowingRequest } from './narrowing.js';
-import { AUTO_ACCEPT_TYPE_CHOICES, loadSettings, writeSettings } from './settings.js';
+import { AUTO_ACCEPT_TYPE_CHOICES, loadSettings, updateSettings } from './settings.js';
 import { isOpenCandidateStatus, PROPOSAL_ACTIONS } from './runtime-store.js';
 
 import { createLedgerService, toApiError } from './ledger-service.js';
@@ -659,16 +659,22 @@ export function createMemoryApp(options = {}) {
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
-        const current = loadSettings(dataDir).settings;
-        const next = {
-          enabled: body.enabled === undefined ? current.enabled : body.enabled,
-          autoAccept: body.autoAccept === undefined ? current.autoAccept : body.autoAccept,
-          autoAcceptTypes: body.autoAcceptTypes === undefined ? current.autoAcceptTypes : body.autoAcceptTypes,
-        };
-        if (typeof next.enabled !== 'boolean') { writeJson(res, 400, { ok: false, error: 'invalid-settings', field: 'enabled' }); return; }
-        if (typeof next.autoAccept !== 'boolean') { writeJson(res, 400, { ok: false, error: 'invalid-settings', field: 'autoAccept' }); return; }
-        if (!Array.isArray(next.autoAcceptTypes)) { writeJson(res, 400, { ok: false, error: 'invalid-settings', field: 'autoAcceptTypes' }); return; }
-        const written = writeSettings(dataDir, next);
+        // Validation happens against the values in force, then the write is
+        // serialised: a plain load-merge-write here lost a field whenever two
+        // requests overlapped, and the losing change vanished without an error.
+        let invalid = null;
+        const written = await updateSettings(dataDir, (current) => {
+          const next = {
+            enabled: body.enabled === undefined ? current.enabled : body.enabled,
+            autoAccept: body.autoAccept === undefined ? current.autoAccept : body.autoAccept,
+            autoAcceptTypes: body.autoAcceptTypes === undefined ? current.autoAcceptTypes : body.autoAcceptTypes,
+          };
+          if (typeof next.enabled !== 'boolean') { invalid = 'enabled'; return null; }
+          if (typeof next.autoAccept !== 'boolean') { invalid = 'autoAccept'; return null; }
+          if (!Array.isArray(next.autoAcceptTypes)) { invalid = 'autoAcceptTypes'; return null; }
+          return next;
+        });
+        if (invalid !== null) { writeJson(res, 400, { ok: false, error: 'invalid-settings', field: invalid }); return; }
         writeJson(res, 200, { ok: true, ...written, choices: { autoAcceptTypes: AUTO_ACCEPT_TYPE_CHOICES } });
       } catch (error) {
         fail(res, error);

@@ -92,3 +92,39 @@ export function writeSettings(dataDir, next) {
   renameSync(temporary, path);
   return { settings: normalised.settings, fallback: normalised.fallback, loaded: true, path };
 }
+
+/**
+ * Update settings under one queue, so a read-modify-write cannot lose a field.
+ *
+ * `writeSettings` is atomic per file, but that is not enough: two callers that
+ * each read the document, change their own field and write the whole object
+ * back will overwrite each other, and the last writer wins. The loser's change
+ * disappears without an error, which is the worst shape a bug can take for a
+ * setting the user believes they just saved.
+ *
+ * `apply` receives the settings currently in force and returns only the fields
+ * it wants to change; anything it omits keeps its value. Updates are serialised
+ * per data directory, so the merge always reads what the previous update wrote.
+ */
+const settingsQueues = new Map();
+
+export function updateSettings(dataDir, apply) {
+  const key = typeof dataDir === 'string' ? dataDir : '';
+  const previous = settingsQueues.get(key) ?? Promise.resolve();
+  const run = previous.then(() => {
+    const current = loadSettings(dataDir);
+    const patch = apply(current.settings);
+    if (patch === null || patch === undefined) return current;
+    return writeSettings(dataDir, { ...current.settings, ...patch });
+  });
+  // The chain must survive a rejection, or one failed update would block every
+  // later one. The caller still sees the rejection through `run`.
+  const tail = run.then(() => undefined, () => undefined);
+  settingsQueues.set(key, tail);
+  // Drop the entry once this update is the last one queued, so a long-lived
+  // Host does not keep one promise per directory it has ever touched.
+  tail.then(() => {
+    if (settingsQueues.get(key) === tail) settingsQueues.delete(key);
+  });
+  return run;
+}

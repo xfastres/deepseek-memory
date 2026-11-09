@@ -9,6 +9,7 @@ import {
   DEFAULT_SETTINGS,
   loadSettings,
   normaliseSettings,
+  updateSettings,
   writeSettings,
 } from '../host/settings.js';
 
@@ -68,4 +69,42 @@ test('saving is atomic and reloads to the same settings', async () => {
 
 test('the auto-accept choices are the ledger types that can be written unattended', () => {
   assert.deepEqual([...AUTO_ACCEPT_TYPE_CHOICES], ['fact', 'preference', 'constraint']);
+});
+
+test('two overlapping updates both survive instead of the last writer winning', async () => {
+  // This is an invariant of updateSettings, not a regression from the previous
+  // route: that handler read and wrote synchronously, so one Node thread could
+  // not interleave two requests inside it. The queue exists so the property
+  // holds once the write can yield (an async fs call, a lock, a retry), and so a
+  // second in-process caller cannot clobber a field the first one just set.
+  await withDir(async (dir) => {
+    await Promise.all([
+      updateSettings(dir, () => ({ enabled: false })),
+      updateSettings(dir, () => ({ autoAccept: true })),
+    ]);
+    const after = loadSettings(dir).settings;
+    assert.equal(after.enabled, false, 'the first field survived');
+    assert.equal(after.autoAccept, true, 'the second field survived too');
+  });
+});
+
+test('an update patches only the fields it returns and keeps the rest', async () => {
+  await withDir(async (dir) => {
+    writeSettings(dir, { enabled: true, autoAccept: true, autoAcceptTypes: ['fact'] });
+    const written = await updateSettings(dir, () => ({ enabled: false }));
+    assert.deepEqual(written.settings, { version: 1, enabled: false, autoAccept: true, autoAcceptTypes: ['fact'] });
+    // Returning null means "nothing to change": the file is left alone.
+    const unchanged = await updateSettings(dir, () => null);
+    assert.equal(unchanged.settings.enabled, false);
+  });
+});
+
+test('a failed update does not block the next one', async () => {
+  // The queue has to survive a rejection, or one bad update would wedge every
+  // later save for the rest of the process.
+  await withDir(async (dir) => {
+    await assert.rejects(() => updateSettings(dir, () => { throw new Error('boom'); }), /boom/);
+    await updateSettings(dir, () => ({ autoAcceptTypes: ['constraint'] }));
+    assert.deepEqual(loadSettings(dir).settings.autoAcceptTypes, ['constraint']);
+  });
 });

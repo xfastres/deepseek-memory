@@ -673,6 +673,27 @@ test('the objection routes speak the correction vocabulary', async () => {
   });
 });
 
+test('two overlapping settings writes do not lose each other', async () => {
+  // This is an invariant test, not a regression test. The previous handler read
+  // and wrote synchronously, so Node's single thread could not interleave two
+  // requests inside it and no field was ever actually lost. The write is now
+  // serialised through updateSettings anyway, so the property survives if the
+  // write ever becomes asynchronous (an fs/promises call, a lock, a retry).
+  await withApp(async (dir) => {
+    const app = testApp(dir);
+    const headers = { ...BROWSER, ...JSON_HEADERS };
+    const [first, second] = await Promise.all([
+      call(app, '/api/dsh-memory/settings', { method: 'POST', headers, body: { enabled: false } }),
+      call(app, '/api/dsh-memory/settings', { method: 'POST', headers, body: { autoAccept: true } }),
+    ]);
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    const after = (await call(app, '/api/dsh-memory/settings')).json.settings;
+    assert.equal(after.enabled, false, 'the first write survived');
+    assert.equal(after.autoAccept, true, 'the second write survived');
+  });
+});
+
 test('the settings route reports, changes and validates the automatic-memory switches', async () => {
   await withApp(async (dir) => {
     const app = testApp(dir);

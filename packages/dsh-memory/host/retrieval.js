@@ -130,11 +130,23 @@ export function contentQuality(text) {
   return null;
 }
 
+/**
+ * Types that must never enter a prompt or a search result on their own.
+ *
+ * `hypothesis` is an inferred claim, not something the user confirmed
+ * (roadmap §4.2, §9.2 "默认不注入的 hypothesis"). Injecting one under a header
+ * that says "用户已确认的长期记忆" states more confidence than the evidence
+ * supports, which is the one thing this plugin must not do. It stays readable
+ * in the panel and through the ledger; it just does not get asserted.
+ */
+export const NOT_INJECTED_TYPES = Object.freeze(['hypothesis']);
+
 /** Which memories may even be considered. Everything excluded has a reason. */
-export function eligibility(memory, { now = new Date(), scope = 'global', includePrivate = false } = {}) {
+export function eligibility(memory, { now = new Date(), scope = 'global', includePrivate = false, includeInferred = false } = {}) {
   if (memory.status !== 'active') return 'not-active';
   if (isExpired(memory, now)) return 'expired';
   if (memory.sensitivity === 'private' && !includePrivate) return 'private';
+  if (!includeInferred && NOT_INJECTED_TYPES.includes(memory.type)) return 'inferred-only';
   const quality = contentQuality(memory.content);
   if (quality !== null) return quality;
   const memoryScope = memory.scope ?? 'global';
@@ -354,13 +366,21 @@ export function explain(entry, hasQuery) {
  * Render the injected block. Numbered so a reply can cite "记忆 #2", and
  * explicitly labelled as user-confirmed so the model does not treat it as
  * instructions.
+ *
+ * Every entry is forced onto one line. The header says these are confirmed
+ * memories to be read as background; an entry containing a line break could
+ * otherwise print its own "2. ..." and pass itself off as a separate entry, or
+ * as a new instruction outside the numbered block. Memory bodies were already
+ * collapsed, but a constraint digest comes from the config file and was not.
  */
 export function formatInjection(chosen, { header = '以下是用户已确认的长期记忆，仅作背景参考：' } = {}) {
   if (!Array.isArray(chosen) || chosen.length === 0) return '';
   const lines = [header];
   chosen.forEach((entry, index) => {
     const scope = entry.memory.scope && entry.memory.scope !== 'global' ? `（范围：${entry.memory.scope}）` : '';
-    const body = typeof entry.text === 'string' ? entry.text : String(entry.memory.content).replace(/\s+/g, ' ').trim();
+    const raw = typeof entry.text === 'string' ? entry.text : String(entry.memory.content);
+    // Collapse all whitespace, including newlines, so one entry is one line.
+    const body = raw.replace(/\s+/gu, ' ').trim();
     lines.push(`${index + 1}. ${body}${scope}`);
   });
   return lines.join('\n');

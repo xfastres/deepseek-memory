@@ -42,10 +42,13 @@ test('search hides everything the injector would not use', () => {
     memory({ id: 'M-private', sensitivity: 'private' }),
     memory({ id: 'M-other-scope', scope: 'project:other' }),
     memory({ id: 'M-short', content: 'pn' }),
+    // An inference is not a confirmed fact, so a tool must not read it back as
+    // one either: search shares the injector's window (roadmap §9.2).
+    memory({ id: 'M-hypothesis', type: 'hypothesis' }),
   ];
   const found = searchMemories(memories, 'pnpm', { now: new Date('2026-01-01T00:00:00.000Z') });
   assert.deepEqual(found.results.map((row) => row.id), ['M-active']);
-  assert.equal(found.hidden, 6, 'every excluded row is counted, not silently dropped');
+  assert.equal(found.hidden, 7, 'every excluded row is counted, not silently dropped');
 });
 
 test('an objected memory is not searchable', () => {
