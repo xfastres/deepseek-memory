@@ -23,6 +23,7 @@ import { createLedgerService, toApiError } from './ledger-service.js';
 import { applyMigration, planMemoryMigration } from './migration.js';
 import { createRuntimeStore } from './runtime-store.js';
 import { createEvidenceResolver } from './session-evidence.js';
+import { isId as isRecordId } from '../../provider-git-ledger/src/schema.js';
 
 export const API_PREFIX = '/api/dsh-memory';
 export const WRITE_TOKEN_HEADER = 'x-dsh-memory-token';
@@ -240,6 +241,10 @@ export function createMemoryApp(options = {}) {
         return;
       }
       if (memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
+      // The id becomes a git pathspec, where `*`, `?` and `..` are glob and
+      // revision syntax. Refuse a malformed one here as a client error instead
+      // of letting git match several records and report them as one timeline.
+      if (!isRecordId(memoryId)) { writeJson(res, 400, { ok: false, error: 'bad-id' }); return; }
       try {
         const versions = await service.history(memoryId);
         if (versions.length === 0) { writeJson(res, 404, { ok: false, error: 'missing' }); return; }
@@ -624,7 +629,12 @@ export function createMemoryApp(options = {}) {
       if (!requiresJson(req)) { writeJson(res, 415, { ok: false, error: 'json-required' }); return; }
       try {
         const body = await readJsonBody(req);
-        const cleared = await runtime.reinstate(body.memoryId);
+        // Same contract as POST /objections: a missing or non-string id is a
+        // client error, not a runtime failure. Passing it straight through made
+        // this the only write route answering 422 where its siblings answer 400.
+        const memoryId = typeof body.memoryId === 'string' ? body.memoryId.trim() : '';
+        if (memoryId === '') { writeJson(res, 400, { ok: false, error: 'missing-id' }); return; }
+        const cleared = await runtime.reinstate(memoryId);
         writeJson(res, 200, { ok: true, cleared, suppressed: await runtime.suppressedIds() });
       } catch (error) {
         runtimeFail(res, error);

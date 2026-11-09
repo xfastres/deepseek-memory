@@ -1238,3 +1238,10 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 缺陷 11（并发覆盖）：`openHistory` / `openEvidence` 无请求代次保护，先点 A 再点 B 时，A 的迟到响应会覆盖 B 的结果，面板显示的版本/证据属于另一条记忆。修：加 `useRef` 代次守卫，过期响应直接丢弃。顺带补上离线重置漏掉的 `reviewPending` 字段（潜在 `undefined.includes`）。
 - 测试：新增 11 项回归（注入 2、提案 2、404/计数/设置 3、证据 2、候选 2），完整套件 **449/449 通过**（43 个文件，三包全绿）。每个关键回归都用 `git stash` 在旧代码上验证过「确实失败」，不是只在新代码上通过。
 - 未验证：真实 DSH 宿主里的端到端表现（本轮全部为 Node 侧单元/集成测试与探针脚本）；浏览器里的面板视觉与交互；`state()` 优化在真实仓库规模（数百条）下的实际耗时；`/settings` 并发写仍是无锁读-改-写（审计发现，未在本轮修改，属数据格式/并发策略决策）。
+
+### 迭代 41（2026-11-09，缺陷排查续：路径注入面与状态码一致性）
+- 依据：审计（迭代 40 的两份只读审计报告）遗留的已确认项，`roadmap §8.3`、`§10.2`。本轮仍只修缺陷，不新增功能。
+- 缺陷 12（未校验的 id 进入 git pathspec）：`GET /history?memoryId=` 把参数原样交给 `ledger.history()`，后者拼成 `git log -- records/<id>.json`。`*`、`?`、`..` 在 git 里是 glob 与 revision 语法，实测 `memoryId=..` 与 `memoryId=records/*.json` 都被接受为 pathspec，可把多条记录的提交当成一条记忆的时间线返回；`memoryId=*` 则抛 `SyntaxError` 变成 500。修：`provider-git-ledger/src/schema.js` 导出 `isId()`（复用既有的 `ID_RE`），`MemoryLedger.history()` 先校验、不合格抛 `SchemaError`；`/history` 在路由层判为 `400 bad-id`（客户端错误，而不是 schema 的 422）。测试 +1（六种非法形态逐一 400，真实 id 仍 200）。
+- 缺陷 13（状态码不一致）：`POST /objections/clear` 直接把 `body.memoryId` 传给 `runtime.reinstate`，缺字段时变成运行时 422，而同类写路由一律 400 `missing-id`。修：与 `POST /objections` 同一条校验，缺/非字符串 → `400 missing-id`。测试 +1（五种坏 body）。
+- 测试：新增 2 项回归，完整套件 **451/451 通过**（43 文件，三包全绿）；两项新测试均在 `git stash` 后的旧代码上确认失败。
+- 未验证：同迭代 40。

@@ -26,6 +26,7 @@ import {
   CATEGORY_TO_TYPE,
   SchemaError,
   canonicalJson,
+  isId,
   newChangeId,
   newMemoryId,
   sha256,
@@ -171,6 +172,10 @@ export class MemoryLedger {
 
   /** Every change that touched one memory, oldest first, with the committed record at each point. */
   async history(memoryId) {
+    // An id becomes a git pathspec below. `*`, `?` and `..` are glob/revision
+    // syntax to git, so an unvalidated id would match several records at once
+    // and report their commits as this memory's timeline.
+    if (!isId(memoryId)) throw new SchemaError('memory id is not a valid record id');
     const commits = (await this.git.log(recordPath(memoryId))).reverse();
     const out = [];
     for (const commit of commits) {

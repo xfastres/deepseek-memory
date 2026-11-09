@@ -845,6 +845,47 @@ test('a proposal is listed, and only the user can accept it', async () => {
   });
 });
 
+test('a memory id that is a git pathspec is refused, not resolved as a glob', async () => {
+  // Regression: /history passed memoryId straight into `git log -- <path>`.
+  // `*`, `?` and `..` are glob and revision syntax to git, so `memoryId=..` or
+  // `memoryId=records/*.json` was accepted as a pathspec and could report
+  // several records as one memory's timeline. The ledger now refuses a
+  // non-record id, and the route reports it as the client error it is.
+  await withApp(async (dir) => {
+    const app = testApp(dir);
+    const created = await call(app, '/api/dsh-memory/add', {
+      method: 'POST', headers: await writeHeaders(app),
+      body: { content: '项目使用 pnpm', sourceRef: { session_id: 's1', event_seq: 2 } },
+    });
+    assert.equal(created.status, 200);
+    const memoryId = created.json.memory.id;
+
+    for (const bad of ['..', '*', 'records/*.json', 'M-20260101-*', 'a/b', '../records/x']) {
+      const refused = await call(app, `/api/dsh-memory/history?memoryId=${encodeURIComponent(bad)}`);
+      assert.equal(refused.status, 400, `memoryId=${JSON.stringify(bad)} must be refused`);
+      assert.equal(refused.json.error, 'bad-id');
+    }
+    // The real id still works, so the guard did not break the read path.
+    const ok = await call(app, `/api/dsh-memory/history?memoryId=${encodeURIComponent(memoryId)}`);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.json.versions.length, 1);
+  });
+});
+
+test('clearing an objection refuses a missing id the same way its sibling routes do', async () => {
+  // Regression: /objections/clear forwarded body.memoryId without checking it,
+  // so a missing id became a runtime 422 while every sibling write answered 400.
+  await withApp(async (dir) => {
+    const app = testApp(dir);
+    const headers = await writeHeaders(app);
+    for (const body of [{}, { memoryId: '' }, { memoryId: 123 }, { memoryId: null }, { memoryId: '   ' }]) {
+      const refused = await call(app, '/api/dsh-memory/objections/clear', { method: 'POST', headers, body });
+      assert.equal(refused.status, 400, `body=${JSON.stringify(body)} must be a client error`);
+      assert.equal(refused.json.error, 'missing-id');
+    }
+  });
+});
+
 test('a settled candidate cannot be accepted again with different text', async () => {
   // Regression: /review accept had no status check, so re-accepting a settled
   // candidate hit the idempotency receipt, replayed the ORIGINAL commit and

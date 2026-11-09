@@ -30,6 +30,18 @@ export const TYPE_TO_CATEGORY = Object.freeze({
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
+/**
+ * Is this a well-formed id?
+ *
+ * Callers that turn an id into a git pathspec need this before doing so: git
+ * reads `*`, `?` and `..` as globs and revision syntax, so an unvalidated id can
+ * name several files or a parent path instead of one record.
+ */
+export function isId(value) {
+  return typeof value === 'string' && ID_RE.test(value);
+}
+
+
 export class SchemaError extends Error {
   constructor(message) {
     super(message);
