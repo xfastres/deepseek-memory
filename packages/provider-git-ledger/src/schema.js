@@ -8,6 +8,17 @@ export const MEMORY_TYPES = Object.freeze(['fact', 'preference', 'constraint', '
 export const MEMORY_STATUSES = Object.freeze(['active', 'superseded', 'retracted']);
 export const CHANGE_TYPES = Object.freeze(['ADD', 'UPDATE', 'RETRACT', 'SUPERSEDE']);
 export const SOURCE_KINDS = Object.freeze(['user-explicit', 'session-extraction', 'user-correction', 'agent-inference']);
+/**
+ * How far a memory may travel.
+ *
+ * Roadmap §4.2 lists `sensitivity` and `pinned` on the memory record, and
+ * retrieval already reads both (`eligibility` drops `private`, scoring pins
+ * `pinned`). Neither was in this schema, so neither could ever be written and
+ * both gates were dead on real ledger data: a memory could not be marked
+ * private, and nothing could be pinned.
+ */
+export const SENSITIVITIES = Object.freeze(['normal', 'private']);
+
 // Mnemon categories map onto memory types; unknown categories become 'fact'.
 export const CATEGORY_TO_TYPE = Object.freeze({
   preference: 'preference',
@@ -119,6 +130,12 @@ export function validateMemory(value) {
     supersedes_id: value.supersedes_id === null || value.supersedes_id === undefined ? null : id(value.supersedes_id, 'supersedes_id'),
     superseded_by_id: value.superseded_by_id === null || value.superseded_by_id === undefined ? null : id(value.superseded_by_id, 'superseded_by_id'),
     importance: value.importance ?? 3,
+    // Both default to the safe/neutral value, so a record written before these
+    // fields existed still validates and behaves exactly as it did.
+    sensitivity: value.sensitivity === undefined || value.sensitivity === null
+      ? 'normal'
+      : oneOf(value.sensitivity, SENSITIVITIES, 'sensitivity'),
+    pinned: value.pinned === true,
     created_at: isoTime(value.created_at, 'created_at'),
     updated_at: isoTime(value.updated_at, 'updated_at'),
     last_change_id: id(value.last_change_id, 'last_change_id'),
@@ -153,6 +170,12 @@ export function validateProposal(value) {
     source_kind: oneOf(value.source_kind, SOURCE_KINDS, 'source_kind'),
     confidence: value.confidence ?? (value.source_kind === 'user-explicit' || value.source_kind === 'user-correction' ? 0.95 : 0.6),
     importance: value.importance ?? 3,
+    // Omitted means "the writer decides": ADD falls back to the record default,
+    // UPDATE keeps what the record already had. An explicit value is validated.
+    sensitivity: value.sensitivity === undefined || value.sensitivity === null
+      ? undefined
+      : oneOf(value.sensitivity, SENSITIVITIES, 'sensitivity'),
+    pinned: typeof value.pinned === 'boolean' ? value.pinned : undefined,
     scope: optionalText(value.scope, 'scope', 256),
     tags: stringList(value.tags, 'tags', 20),
     entities: stringList(value.entities, 'entities', 50),

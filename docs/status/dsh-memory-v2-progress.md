@@ -1254,3 +1254,13 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - **诚实更正（本轮最重要的一条）**：上一轮审计报告把 `/settings` 列为「无锁读-改-写，并发丢字段」的**已确认缺陷**，我最初也照此写了一个"并发丢更新"的回归测试。但 `git show HEAD` 核对后发现：原路由在 `loadSettings` 与 `writeSettings` 之间**没有任何 `await`**，Node 单线程无法在两者之间插入第二个请求，所以**进程内并不存在该丢更新**，那条测试在旧代码上也是通过的。我把两个测试的注释改写为「不变量测试，不是回归测试」，并在 `updateSettings` 的文档里写明它防的是「写入将来变成异步（fs/promises、锁、重试）之后」的丢更新。串行化本身仍值得保留（多调用方 + 未来异步写入），但不能记成"修掉了一个已发生的缺陷"。
 - 测试：新增 3 项（检索 2、搜索 1 并入既有用例），完整套件 **457/457 通过**（43 文件，三包全绿）；hypothesis 与伪造条目两项均在旧代码上确认失败。
 - 未验证：真实宿主端到端；浏览器面板；`includeInferred` 目前没有调用方（有意如此，只为保留显式入口）。
+
+### 迭代 43（2026-11-09，数据格式：让 privacy / pinned 真正可写，闸门才可能生效）
+- 依据：`roadmap §4.2`（MemoryRecord 明确含 `sensitivity: "normal" | "private"` 与 `pinned: boolean`）、`§9.2`（private 不得进入普通检索与注入）、`§9.3`（置顶策略）。缺口证据：`host/retrieval.js` 的 `eligibility()` 一直在读 `memory.sensitivity === 'private'`、`scoreMemory()` 一直在读 `memory.pinned === true`，但 `provider-git-ledger/src/schema.js` 的 `validateMemory` **没有这两个字段**，`validateProposal` 也没有，`ledger-service` 更不转发。探针实测：带 `sensitivity: 'private'` 与 `pinned: true` 写入后，读回一律是 `null` / `undefined`——**两个安全闸门在真实账本数据上从未生效过**，等于 private 标记与置顶都只是文档里的承诺。
+- 实现：
+  - `schema.js`：新增 `SENSITIVITIES = ['normal','private']`；`validateMemory` 增加 `sensitivity`（缺省 `'normal'`，未知值抛 `SchemaError`）与 `pinned`（严格布尔，缺省 `false`）；`validateProposal` 增加两者但**保持 `undefined` 表示"没意见"**，由 Writer 决定沿用还是取默认。
+  - `ledger.js`：ADD 用 `proposal.sensitivity ?? 'normal'` 与 `pinned === true`；UPDATE / SUPERSEDE 用 `proposal.x ?? before.x`——一次只改正文的编辑不会顺手把记忆改成公开或取消置顶。
+  - `ledger-service.js`：`toUiMemory` 输出 `pinned`（此前只带 `sensitivity`，`pinned` 连读都读不到）；`add`/`update` 转发两个字段。
+- 测试：`ledger-service` +2、改 1（原先断言「账本还没有 private 标记，缺失即缺失」——那是把缺口写成了预期，现改为断言中性默认值，并新增「可写入 / 编辑不改 / 显式可改 / 未知值拒绝且零写入」）；`retrieval` +1（用账本形状的行验证 private 被排除且给出 `private` 原因、pinned 在零词面命中时仍进入、无关普通记忆不进入、`includePrivate` 仍需显式开启）。完整套件 **460/460 通过**（43 文件，三包全绿）；三个新用例在旧 schema/ledger 上确认失败。
+- 说明：这是**数据格式扩展**，不是行为回归修复。旧记录不含这两个字段，`validateMemory` 会补上中性默认值，读取行为与之前一致（private 仍不触发，因为旧记录本就没有标记）；不需要迁移脚本。
+- 未验证：真实宿主端到端；面板尚未提供 private / 置顶的输入控件（API 与账本已可用，UI 入口未接）；`pinned` 目前只影响打分与预算旁路，没有「置顶但内容质量不合格」之类的额外约束。

@@ -165,7 +165,67 @@ test('the state row carries what retrieval needs to be safe', async () => {
     assert.deepEqual(memory.tags, [], 'the row carries a tag list even when the writer stored none');
     assert.deepEqual(memory.entities, [], 'entities are an array, never absent');
     assert.equal(memory.valid_to, null, 'no expiry is stated, not invented');
-    assert.equal(memory.sensitivity, null, 'the ledger has no private marker yet; absent means absent');
+    // These two used to be unreadable because the ledger schema had no such
+    // fields, so `eligibility` (private) and scoring (pinned) could never fire.
+    // Absent now means the neutral value the schema writes, not "missing".
+    assert.equal(memory.sensitivity, 'normal', 'a memory with no privacy marker is normal, not null');
+    assert.equal(memory.pinned, false, 'nothing is pinned unless the writer said so');
+  });
+});
+
+test('privacy and pinning are storable, so their retrieval gates can fire', async () => {
+  await withService(async (service) => {
+    const secret = await service.add({
+      content: '这条是私密记忆，不该进入普通注入。',
+      type: 'fact',
+      sourceRefs: REF,
+      sensitivity: 'private',
+    });
+    const pinned = await service.add({
+      content: '这条是置顶记忆，总是进入注入。',
+      type: 'fact',
+      sourceRefs: REF,
+      pinned: true,
+    });
+    const rows = (await service.state()).memories;
+    const secretRow = rows.find((row) => row.id === secret.memory.id);
+    const pinnedRow = rows.find((row) => row.id === pinned.memory.id);
+    assert.equal(secretRow.sensitivity, 'private');
+    assert.equal(secretRow.pinned, false);
+    assert.equal(pinnedRow.pinned, true);
+    assert.equal(pinnedRow.sensitivity, 'normal');
+
+    // An edit that says nothing about them must not silently change them.
+    const [secretNow] = rows.filter((row) => row.id === secret.memory.id);
+    await service.update({
+      memoryId: secret.memory.id,
+      content: '这条私密记忆改了个说法，仍然私密。',
+      expectedBaseChangeId: secretNow.last_change_id,
+    });
+    const afterEdit = (await service.state()).memories.find((row) => row.id === secret.memory.id);
+    assert.equal(afterEdit.sensitivity, 'private', 'a content edit does not un-private a memory');
+
+    // An explicit change is honoured.
+    await service.update({
+      memoryId: secret.memory.id,
+      content: '这条现在可以公开了。',
+      expectedBaseChangeId: afterEdit.last_change_id,
+      sensitivity: 'normal',
+      pinned: true,
+    });
+    const afterFlip = (await service.state()).memories.find((row) => row.id === secret.memory.id);
+    assert.equal(afterFlip.sensitivity, 'normal');
+    assert.equal(afterFlip.pinned, true);
+  });
+});
+
+test('an unknown sensitivity is refused rather than stored', async () => {
+  await withService(async (service) => {
+    await assert.rejects(
+      () => service.add({ content: '未知的私密级别。', type: 'fact', sourceRefs: REF, sensitivity: 'secret' }),
+      (error) => error.name === 'SchemaError',
+    );
+    assert.deepEqual((await service.state()).memories, [], 'nothing was written');
   });
 });
 

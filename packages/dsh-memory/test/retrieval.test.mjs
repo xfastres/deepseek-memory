@@ -156,6 +156,27 @@ test('eligibility answers one reason per exclusion', () => {
   assert.equal(eligibility(memory({ scope: 'workspace:other' }), { now: NOW, scope: 'global' }), 'other-scope');
 });
 
+test('privacy and pinning act on the values the ledger now stores', () => {
+  // The ledger schema had no sensitivity/pinned fields, so these two gates could
+  // never fire on real data even though retrieval already read them. With the
+  // fields stored, check the behaviour the roadmap asks for (§9.2, §9.3).
+  const secret = memory({ id: 'M-secret', content: '私密记忆，不该进入普通注入', sensitivity: 'private' });
+  const pinned = memory({ id: 'M-pinned', content: '置顶记忆，总是进入注入', pinned: true });
+  const plain = memory({ id: 'M-plain', content: '普通记忆，按相关度进入' });
+
+  // A query that genuinely shares no gram with any of them.
+  const unrelated = 'zzz qqq';
+  const selected = selectMemories([secret, pinned, plain], unrelated, { now: NOW });
+  assert.ok(!selected.chosen.some((entry) => entry.memory.id === 'M-secret'), 'a private memory stays out');
+  assert.ok(selected.excluded.some((entry) => entry.id === 'M-secret' && entry.reason === 'private'), 'and says why');
+  assert.ok(selected.chosen.some((entry) => entry.memory.id === 'M-pinned'), 'a pinned memory enters with no lexical match');
+  assert.ok(!selected.chosen.some((entry) => entry.memory.id === 'M-plain'), 'an unrelated ordinary memory does not');
+
+  // Opting into private content is explicit, never implied.
+  const withPrivate = selectMemories([secret], '私密', { now: NOW, includePrivate: true });
+  assert.equal(withPrivate.chosen.length, 1);
+});
+
 test('an inferred hypothesis is never injected under a "user confirmed" header', () => {
   // Roadmap §4.2/§9.2: a hypothesis is an inference, not something the user
   // confirmed, and must not be injected by default. It used to pass eligibility

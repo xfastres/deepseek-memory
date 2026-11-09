@@ -51,6 +51,7 @@ function toUiMemory(record, version) {
     // never fired because the row simply lacked the field.
     valid_to: typeof record.valid_to === 'string' ? record.valid_to : null,
     sensitivity: typeof record.sensitivity === 'string' ? record.sensitivity : null,
+    pinned: record.pinned === true,
     tags: Array.isArray(record.tags) ? record.tags.slice(0, 20) : [],
     entities: Array.isArray(record.entities) ? record.entities.slice(0, 50) : [],
   };
@@ -345,8 +346,12 @@ export function createLedgerService(options = {}) {
    * reads them (toUiMemory); dropping them here meant every memory promised
    * structure the ledger could never hold. They stay optional: the schema turns
    * an omitted list into [].
+   *
+   * `sensitivity` and `pinned` are forwarded for the same reason: retrieval
+   * gates on both (`eligibility` drops private, scoring pins pinned), and with
+   * no way to write them those gates could never fire on real data.
    */
-  function add({ content, type = 'fact', sourceRefs, idempotencyKey, scope, reason, tags, entities }) {
+  function add({ content, type = 'fact', sourceRefs, idempotencyKey, scope, reason, tags, entities, sensitivity, pinned }) {
     return apply({
       change_type: 'ADD',
       content,
@@ -356,12 +361,14 @@ export function createLedgerService(options = {}) {
       scope,
       tags,
       entities,
+      sensitivity,
+      pinned,
       reason,
       idempotency_key: idempotencyKey,
     });
   }
 
-  function update({ memoryId, content, expectedBaseChangeId, sourceRefs, reason, tags, entities }) {
+  function update({ memoryId, content, expectedBaseChangeId, sourceRefs, reason, tags, entities, sensitivity, pinned }) {
     return apply({
       change_type: 'UPDATE',
       target_memory_id: memoryId,
@@ -372,6 +379,8 @@ export function createLedgerService(options = {}) {
       // update that says nothing about structure cannot erase it by accident.
       tags,
       entities,
+      sensitivity,
+      pinned,
       expected_base_change_id: expectedBaseChangeId ?? null,
       reason,
     });

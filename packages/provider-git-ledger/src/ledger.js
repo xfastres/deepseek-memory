@@ -295,6 +295,8 @@ export class MemoryLedger {
         supersedes_id: null,
         superseded_by_id: null,
         importance: proposal.importance,
+        sensitivity: proposal.sensitivity ?? 'normal',
+        pinned: proposal.pinned === true,
         created_at: now,
         updated_at: now,
         last_change_id: changeId,
@@ -312,6 +314,10 @@ export class MemoryLedger {
         entities: proposal.entities.length > 0 ? proposal.entities : before.entities,
         source_refs: dedupeRefs([...before.source_refs, ...proposal.source_refs]),
         importance: proposal.importance ?? before.importance,
+        // An update that says nothing about these keeps them: a content edit
+        // must not silently un-private or un-pin a memory.
+        sensitivity: proposal.sensitivity ?? before.sensitivity,
+        pinned: proposal.pinned ?? before.pinned,
         updated_at: now,
         last_change_id: changeId,
       });
@@ -337,6 +343,10 @@ export class MemoryLedger {
         supersedes_id: before.memory_id,
         superseded_by_id: null,
         importance: proposal.importance ?? before.importance,
+        // The replacement inherits how far the old one was allowed to travel,
+        // unless the proposal says otherwise.
+        sensitivity: proposal.sensitivity ?? before.sensitivity,
+        pinned: proposal.pinned ?? before.pinned,
         created_at: now,
         updated_at: now,
         last_change_id: changeId,
