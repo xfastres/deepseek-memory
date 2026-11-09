@@ -107,6 +107,33 @@ test('injections are recorded with their reasons and returned newest last', asyn
   });
 });
 
+test('re-recording the same logical injection merges instead of duplicating', async () => {
+  // flushInjections writes a batch and only advances its cursor when the whole
+  // batch succeeded. A failure partway leaves the already-written records
+  // pending, and the next step boundary retries them - so a blind push turned
+  // one injection into two audit rows. Merging on the logical key keeps it one.
+  await withRoot(async (root) => {
+    const store = createRuntimeStore({ root });
+    const record = { sessionId: 's1', turn: 3, snapshotHead: 'h', memoryIds: ['M-1'], chars: 10, key: 'sha256:abc', occurrences: 2 };
+    await store.recordInjection(record);
+    await store.recordInjection(record);
+    const rows = await store.listInjections({ limit: 50 });
+    assert.equal(rows.length, 1, 'one logical injection is one row');
+    assert.equal(rows[0].key, 'sha256:abc');
+    assert.equal(rows[0].occurrences, 2, 'the retry updates the occurrence count, not the row count');
+
+    // A record without a key cannot be matched, so it still appends: absent
+    // identity must not be treated as "the same as the last one".
+    await store.recordInjection({ sessionId: 's1', turn: 4, memoryIds: ['M-2'], chars: 5 });
+    await store.recordInjection({ sessionId: 's1', turn: 4, memoryIds: ['M-2'], chars: 5 });
+    assert.equal((await store.listInjections({ limit: 50 })).length, 3);
+
+    // A genuinely different key is a different injection.
+    await store.recordInjection({ ...record, key: 'sha256:def' });
+    assert.equal((await store.listInjections({ limit: 50 })).length, 4);
+  });
+});
+
 test('old injections are pruned, and the cap keeps the newest', async () => {
   await withRoot(async (root) => {
     const day = 86_400_000;

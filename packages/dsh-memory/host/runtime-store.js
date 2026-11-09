@@ -453,6 +453,22 @@ export function createRuntimeStore(options = {}) {
           memories: Array.isArray(record.memories) ? record.memories.slice(0, 20) : [],
           excluded: Array.isArray(record.excluded) ? record.excluded.slice(0, 50) : [],
         };
+        // Idempotent on the logical key. The caller flushes a batch and only
+        // advances its cursor when the whole batch succeeded, so a failure
+        // partway leaves the already-written records pending and they are
+        // retried at the next step boundary. Pushing blindly turned one
+        // injection into two audit rows; merging by key keeps it one and lets
+        // the retry update the occurrence count instead.
+        if (entry.key !== null) {
+          const existing = document.injections.find((row) => row !== null && typeof row === 'object' && row.key === entry.key);
+          if (existing !== undefined) {
+            existing.occurrences = Math.max(existing.occurrences ?? 1, entry.occurrences);
+            existing.at = entry.at;
+            existing.last_at = entry.at;
+            return existing;
+          }
+        }
+        entry.last_at = entry.at;
         document.injections.push(entry);
         return entry;
       });

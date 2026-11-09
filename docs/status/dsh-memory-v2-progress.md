@@ -1272,3 +1272,9 @@ P0 正确性与安全（数据损坏、状态错误、敏感泄露、回归）�
 - 连带修复（本轮改动的必要条件）：`injection.js` 的 flush 游标原本是数组下标 `flushed`。日志开始裁剪后，下标会漂移——已 flush 的记录可能重新看起来是 pending（**会被重复写入持久化审计**），或新记录被跳过。改为按记录自增的 `seq` 定位，`pendingRecords()` 用 `seq > flushedSeq` 过滤，`markFlushed` 把游标推进到真正交出去的最后一条。`injection-log` 每条记录新增 `seq`（`dropped + length + 1`，裁剪后仍单调）。
 - 测试：`injection-log` +2（八种 pools 形状不抛且未知记为 null；1200 次注入后条数封顶、dropped 计数正确、seq 仍单调）；`injections` +1（flush 后灌入超过上限的记录，断言已 flush 的不复活、pending 不超上限、二次 flush 清空）。完整套件 **463/463 通过**（43 文件，三包全绿）。两个缺陷都在旧代码上用探针脚本确认：旧 `note()` 抛 `TypeError` 且 `records` 为 0；旧实现 1200 次注入保留 1200 条。
 - 未验证：真实宿主长会话的实际堆占用（本地为合成压测）；`MAX_IN_MEMORY_RECORDS=500` 这个值是否与真实 step 频率匹配（当前远高于任何合理的未 flush 积压）；浏览器面板「注入追踪」在裁剪后是否仍显示足够历史（它读 `/injections`，即持久化数据，不受影响）。
+
+### 迭代 45（2026-11-09，持久化注入审计：部分失败重试导致重复行）
+- 依据：`roadmap §9.3`（注入记录须可解释、可审计）、`§1.1`（失败不得伪造成功）。缺口证据：`index.js` 的 `flushInjections` 逐条 `recordInjection` 写入一批记录，**只有整批成功才调用 `markFlushed`**。若第 3 条抛错，前两条已落盘但游标没推进，下一个 step 边界会把整批重写一遍；而 `runtime-store.recordInjection` 是**无条件 `push`**，没有任何按键去重。探针实测：3 条一批、第 3 条失败后重试，最终落盘 5 行（k1,k2,k1,k2,k3）——同一次注入被记成两条审计行。内存侧 `injection-log` 本来就按 `key` 合并并累加 `occurrences`，持久化侧没有，两边行为不一致。
+- 实现：`runtime-store.recordInjection` 在 `entry.key !== null` 时先找同 `key` 的既有行，命中则合并（`occurrences` 取较大值、`at`/`last_at` 更新为新时间）并返回既有行，不追加。无 `key` 的记录仍然追加——**缺少标识不能被当成"和上一条相同"**。新增 `last_at` 字段与内存侧语义对齐。
+- 测试：`runtime-store` +1（同 key 写两次只留一行且 `occurrences` 正确；无 key 写两次留两行；不同 key 各自成行）。完整套件 **464/464 通过**（43 文件，三包全绿）；新用例在旧 `runtime-store.js` 上确认失败。
+- 未验证：真实宿主里 flush 部分失败的实际概率（本地为构造场景）；`prune()` 仍只清理 `injections`，`candidates` / `objections` / `proposals` 无上限——这是下一轮要处理的容量问题，本轮未动，因为需要先定保留策略（roadmap §4.3 只说"高频运行时数据"，没给具体上限）。
