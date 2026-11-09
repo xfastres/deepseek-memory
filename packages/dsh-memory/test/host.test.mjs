@@ -411,10 +411,21 @@ test('a natural-language correction hides the memory it clearly names', async ()
     }, () => decision);
 
     const runtime = createRuntimeStore({ root: join(dir, 'runtime') });
+    // The correction path is fire-and-forget, so the test has to wait for it.
+    // It must poll for the thing it is about to assert: `suppressedIds()` turns
+    // visible as soon as the objection is written, but `contextState.lastCorrection`
+    // is assigned in the `.then()` that runs afterwards, so polling only for the
+    // write let the probe read a stale null roughly one run in eight.
     let suppressed = [];
+    let probe = null;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       suppressed = await runtime.suppressedIds();
-      if (suppressed.length > 0) break;
+      const candidate = await tooled[0].execute();
+      const correction = candidate?.injection?.context?.lastCorrection;
+      if (suppressed.length > 0 && correction !== null && correction !== undefined) {
+        probe = candidate;
+        break;
+      }
       await new Promise((resolve) => { setTimeout(resolve, 20); });
     }
     assert.equal(suppressed.length, 1, 'the objection was recorded without the user opening the panel');
@@ -423,7 +434,7 @@ test('a natural-language correction hides the memory it clearly names', async ()
     assert.equal(objections[0].memory_id, suppressed[0]);
     assert.ok(objections[0].reason.includes('pnpm'), 'the reason keeps the user words, not an invention');
 
-    const probe = await tooled[0].execute();
+    assert.ok(probe !== null, 'the correction path reported itself through the probe');
     assert.equal(probe.injection.context.lastCorrection.recorded, true);
     assert.equal(probe.injection.context.lastCorrection.narrowing, 'not-a-review',
       'an "outdated" verdict is not a narrowing request, and the probe says so');
