@@ -12,6 +12,8 @@
 const CANDIDATE_KEY = 'dsh-memory.candidates.v1';
 const FORMAL_KEY = 'dsh-memory.formal.v1';
 
+import { toLedgerType } from './memory-types.js';
+
 function normalise(text) {
   return String(text ?? '').replace(/\s+/gu, ' ').trim();
 }
@@ -74,13 +76,25 @@ export async function planMemoryMigration(options = {}) {
       continue;
     }
     seen.add(dedupeKey(content));
+    // The old store was written by older client code, so its `type` may be a
+    // rule kind the ledger does not know. Passing it through unchanged made the
+    // ledger reject the record at write time, which silently dropped a real user
+    // rule ("instruction") instead of mapping it to `constraint` the way the
+    // candidate and proposal paths already do. An unmappable kind is refused
+    // here, at plan time, where it can be reported rather than lost mid-import.
+    const rawType = typeof memory.type === 'string' && memory.type !== '' ? memory.type : 'fact';
+    const ledgerType = toLedgerType(rawType);
+    if (ledgerType === null) {
+      skipped.push({ id: memory.id ?? null, reason: 'unsupported-type', type: rawType });
+      continue;
+    }
     operations.push({
       legacyId: memory.id ?? null,
       legacyVersion: memory.version ?? 1,
       proposal: {
         change_type: 'ADD',
         content,
-        type: typeof memory.type === 'string' ? memory.type : 'fact',
+        type: ledgerType,
         source_kind: memory.source_kind === 'agent-inference' ? 'agent-inference' : 'user-explicit',
         source_refs: [ref],
         // Stable per legacy record, so re-running the migration can never double-write.

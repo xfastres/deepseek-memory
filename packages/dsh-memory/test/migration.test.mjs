@@ -110,6 +110,48 @@ test('migration writes real ledger commits and re-running replays instead of dup
   }
 });
 
+test('a legacy rule kind is mapped, not lost, and an unsupported one is reported', async () => {
+  // The old browser store was written by older client code, so its `type` may be
+  // a rule kind the ledger does not know. Forwarding it unchanged made the
+  // ledger reject the record at write time: a real user rule typed `instruction`
+  // was silently dropped instead of becoming `constraint`, which the candidate
+  // and proposal paths already do. An unmappable kind must be refused at plan
+  // time so it can be reported rather than lost mid-import.
+  const plan = await planMemoryMigration({
+    legacyMemories: [
+      { id: 'L-fact', status: 'active', content: '这是一条事实记忆', type: 'fact', source: { session_id: 'session-a', turn: 1 } },
+      { id: 'L-rule', status: 'active', content: '先看现状再提方案，不虚构结果', type: 'instruction', source: { session_id: 'session-a', turn: 1 } },
+      { id: 'L-unknown', status: 'active', content: '类型不在账本词汇里', type: 'gossip', source: { session_id: 'session-a', turn: 1 } },
+      { id: 'L-none', status: 'active', content: '旧记录没有类型字段', source: { session_id: 'session-a', turn: 1 } },
+    ],
+    resolve: resolveAll(),
+  });
+
+  const byId = new Map(plan.operations.map((operation) => [operation.legacyId, operation]));
+  assert.equal(byId.get('L-fact').proposal.type, 'fact');
+  assert.equal(byId.get('L-rule').proposal.type, 'constraint', 'instruction means constraint, as everywhere else');
+  assert.equal(byId.get('L-none').proposal.type, 'fact', 'an absent type is a fact, not a refusal');
+  assert.ok(!byId.has('L-unknown'), 'an unsupported kind is not planned');
+  assert.deepEqual(
+    plan.skipped.filter((entry) => entry.id === 'L-unknown'),
+    [{ id: 'L-unknown', reason: 'unsupported-type', type: 'gossip' }],
+    'and it is reported with the kind that was refused',
+  );
+
+  // End to end: the mapped record really lands in the ledger.
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-migrate-type-'));
+  try {
+    const service = createLedgerService({ root: join(dir, 'ledger') });
+    const result = await applyMigration(service, plan);
+    assert.equal(result.failed, 0, 'no planned record fails at write time');
+    const state = await service.state();
+    const rule = state.memories.find((memory) => memory.content.includes('先看现状'));
+    assert.equal(rule.type, 'constraint', 'the user rule survived as a constraint');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('the legacy store reader tolerates missing, malformed and non-array values', () => {
   const empty = readLegacyStore({ getItem: () => null });
   assert.deepEqual(empty, { memories: [], candidates: [] });
